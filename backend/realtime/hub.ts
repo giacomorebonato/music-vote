@@ -144,5 +144,37 @@ export function createWsUpgradeHandler({
 	}
 }
 
+/** @public */
+export type SessionLike = { user?: { id: string } } | null | undefined
+
+/** @public */
+export type RoomLike = { hostId: string } | null
+
+/** @public */
+export function createProdRoleResolver({
+	getSession,
+	findRoom,
+}: {
+	getSession: (req: Request) => Promise<SessionLike>
+	findRoom: (roomId: string) => Promise<RoomLike>
+}): RoleResolver {
+	return async (req, roomId) => {
+		const room = await findRoom(roomId)
+		if (!room) {
+			return {
+				error: new Response(JSON.stringify({ error: 'room not found' }), {
+					status: 404,
+					headers: { 'content-type': 'application/json' },
+				}),
+			}
+		}
+		const session = await getSession(req)
+		if (session?.user?.id === room.hostId) {
+			return { role: 'host' as ChannelRole }
+		}
+		return { role: 'audience' as ChannelRole }
+	}
+}
+
 /** @public Convenience singleton used by the production server. */
 export const hub = createRealtimeHub()

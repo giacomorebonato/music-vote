@@ -1,8 +1,10 @@
 import { expect, test } from 'bun:test'
 import {
+	createProdRoleResolver,
 	createRealtimeHub,
 	createWsUpgradeHandler,
 	type RoleResolver,
+	type SessionLike,
 	type SocketData,
 } from '@backend/realtime/hub'
 import type { WsEvent } from '@shared/realtime/events'
@@ -100,13 +102,18 @@ test('two audience clients receive a published audience event', async () => {
 	server.stop(true)
 })
 
-test('host event is not delivered to audience clients', async () => {
-	const resolveRole: RoleResolver = async () => ({ role: 'audience' })
+test('host and audience sockets receive only their channel events', async () => {
+	const resolveRole: RoleResolver = async (req) => {
+		const url = new URL(req.url)
+		return { role: url.searchParams.get('as') === 'host' ? 'host' : 'audience' }
+	}
 	const { server, hub } = startServer(resolveRole)
 
-	const ws = openSocket(wsUrl(server, 'room-a'))
-	const messages = collectMessages(ws)
-	await waitForOpen(ws)
+	const audienceWs = openSocket(`${wsUrl(server, 'room-a')}&as=audience`)
+	const hostWs = openSocket(`${wsUrl(server, 'room-a')}&as=host`)
+	const audienceMessages = collectMessages(audienceWs)
+	const hostMessages = collectMessages(hostWs)
+	await Promise.all([waitForOpen(audienceWs), waitForOpen(hostWs)])
 
 	hub.publishAudience('room-a', {
 		type: 'poll_opened',
@@ -118,7 +125,8 @@ test('host event is not delivered to audience clients', async () => {
 		},
 	})
 	await new Promise((resolve) => setTimeout(resolve, 20))
-	expect(messages).toHaveLength(1)
+	expect(audienceMessages).toHaveLength(1)
+	expect(hostMessages).toHaveLength(0)
 
 	hub.publishHost('room-a', {
 		type: 'vote_count',
@@ -127,44 +135,18 @@ test('host event is not delivered to audience clients', async () => {
 		no: 1,
 	})
 	await new Promise((resolve) => setTimeout(resolve, 20))
-	expect(messages).toHaveLength(1)
-
-	ws.close()
-	await waitForClose(ws)
-	server.stop(true)
-})
-
-test('authenticated non-owner joins audience channel, not host', async () => {
-	const resolveRole: RoleResolver = async () => ({ role: 'audience' })
-	const { server, hub } = startServer(resolveRole)
-
-	const ws = openSocket(wsUrl(server, 'room-a'))
-	const messages = collectMessages(ws)
-	await waitForOpen(ws)
-
-	hub.publishAudience('room-a', {
-		type: 'poll_opened',
-		poll: {
-			id: 'poll-1',
-			question: 'Add melody?',
-			options: ['yes', 'no'],
-			closesAt: '2026-10-01T00:00:00.000Z',
-		},
-	})
-	await new Promise((resolve) => setTimeout(resolve, 20))
-	expect(messages).toHaveLength(1)
-
-	hub.publishHost('room-a', {
+	expect(audienceMessages).toHaveLength(1)
+	expect(hostMessages).toHaveLength(1)
+	expect(hostMessages[0]).toEqual({
 		type: 'vote_count',
 		pollId: 'poll-1',
 		yes: 3,
 		no: 1,
 	})
-	await new Promise((resolve) => setTimeout(resolve, 20))
-	expect(messages).toHaveLength(1)
 
-	ws.close()
-	await waitForClose(ws)
+	audienceWs.close()
+	hostWs.close()
+	await Promise.all([waitForClose(audienceWs), waitForClose(hostWs)])
 	server.stop(true)
 })
 
@@ -180,4 +162,55 @@ test('nonexistent room join is rejected and connection closed', async () => {
 	expect(ws.readyState).toBe(WebSocket.CLOSED)
 
 	server.stop(true)
+})
+
+test('prod role resolver: owner session becomes host', async () => {
+	const resolveRole = createProdRoleResolver({
+		findRoom: async () => ({ hostId: 'user-1' }),
+		getSession: async () => ({ user: { id: 'user-1' } }) as SessionLike,
+	})
+	const result = await resolveRole(
+		new Request('http://localhost/ws?room=r1'),
+		'r1',
+	)
+	expect(result).toEqual({ role: 'host' })
+})
+
+test('prod role resolver: non-owner session becomes audience', async () => {
+	const resolveRole = createProdRoleResolver({
+		findRoom: async () => ({ hostId: 'user-1' }),
+		getSession: async () => ({ user: { id: 'user-2' } }) as SessionLike,
+	})
+	const result = await resolveRole(
+		new Request('http://localhost/ws?room=r1'),
+		'r1',
+	)
+	expect(result).toEqual({ role: 'audience' })
+})
+
+test('prod role resolver: anonymous session becomes audience', async () => {
+	const resolveRole = createProdRoleResolver({
+		findRoom: async () => ({ hostId: 'user-1' }),
+		getSession: async () => null,
+	})
+	const result = await resolveRole(
+		new Request('http://localhost/ws?room=r1'),
+		'r1',
+	)
+	expect(result).toEqual({ role: 'audience' })
+})
+
+test('prod role resolver: missing room returns 404 error response', async () => {
+	const resolveRole = createProdRoleResolver({
+		findRoom: async () => null,
+		getSession: async () => null,
+	})
+	const result = await resolveRole(
+		new Request('http://localhost/ws?room=r1'),
+		'r1',
+	)
+	expect('error' in result).toBe(true)
+	if ('error' in result) {
+		expect(result.error.status).toBe(404)
+	}
 })

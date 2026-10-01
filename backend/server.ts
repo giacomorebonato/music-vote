@@ -5,9 +5,9 @@ import {
 	TRPC_ENDPOINT,
 } from '@backend/normalize-trpc-request'
 import {
-	type ChannelRole,
-	createRealtimeHub,
+	createProdRoleResolver,
 	createWsUpgradeHandler,
+	hub,
 	type RoleResolver,
 	type SocketData,
 } from '@backend/realtime/hub'
@@ -20,25 +20,10 @@ import { fetchRequestHandler } from '@trpc/server/adapters/fetch'
 const isDev = process.env.NODE_ENV !== 'production'
 const port = Number(process.env.PORT ?? 3000)
 
-const hub = createRealtimeHub()
-
-const resolveRole: RoleResolver = async (req, roomId) => {
-	const room = await prisma.room.findUnique({ where: { id: roomId } })
-	if (!room) {
-		return {
-			error: new Response(JSON.stringify({ error: 'room not found' }), {
-				status: 404,
-				headers: { 'content-type': 'application/json' },
-			}),
-		}
-	}
-
-	const session = await auth.api.getSession({ headers: req.headers })
-	if (session?.user?.id === room.hostId) {
-		return { role: 'host' as ChannelRole }
-	}
-	return { role: 'audience' as ChannelRole }
-}
+const resolveRole: RoleResolver = createProdRoleResolver({
+	getSession: (req) => auth.api.getSession({ headers: req.headers }),
+	findRoom: (roomId) => prisma.room.findUnique({ where: { id: roomId } }),
+})
 
 const handleWs = createWsUpgradeHandler({ resolveRole })
 
@@ -115,9 +100,7 @@ const httpServer = Bun.serve<SocketData>({
 		const url = new URL(req.url)
 
 		if (url.pathname === '/ws') {
-			const upgraded = await handleWs(req, server)
-			if (upgraded !== undefined) return upgraded
-			return new Response(null, { status: 101 })
+			return await handleWs(req, server)
 		}
 
 		// Bot prerender runs first (like the plugin's onRequest hook). Lightpanda's
