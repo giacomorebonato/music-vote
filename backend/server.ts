@@ -37,14 +37,6 @@ const resolveRole: RoleResolver = async (req, roomId) => {
 	if (session?.user?.id === room.hostId) {
 		return { role: 'host' as ChannelRole }
 	}
-	if (session) {
-		return {
-			error: new Response(JSON.stringify({ error: 'not host' }), {
-				status: 403,
-				headers: { 'content-type': 'application/json' },
-			}),
-		}
-	}
 	return { role: 'audience' as ChannelRole }
 }
 

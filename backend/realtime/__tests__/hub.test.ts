@@ -134,9 +134,43 @@ test('host event is not delivered to audience clients', async () => {
 	server.stop(true)
 })
 
-test('non-owner host attempt is rejected and connection closed', async () => {
+test('authenticated non-owner joins audience channel, not host', async () => {
+	const resolveRole: RoleResolver = async () => ({ role: 'audience' })
+	const { server, hub } = startServer(resolveRole)
+
+	const ws = openSocket(wsUrl(server, 'room-a'))
+	const messages = collectMessages(ws)
+	await waitForOpen(ws)
+
+	hub.publishAudience('room-a', {
+		type: 'poll_opened',
+		poll: {
+			id: 'poll-1',
+			question: 'Add melody?',
+			options: ['yes', 'no'],
+			closesAt: '2026-10-01T00:00:00.000Z',
+		},
+	})
+	await new Promise((resolve) => setTimeout(resolve, 20))
+	expect(messages).toHaveLength(1)
+
+	hub.publishHost('room-a', {
+		type: 'vote_count',
+		pollId: 'poll-1',
+		yes: 3,
+		no: 1,
+	})
+	await new Promise((resolve) => setTimeout(resolve, 20))
+	expect(messages).toHaveLength(1)
+
+	ws.close()
+	await waitForClose(ws)
+	server.stop(true)
+})
+
+test('nonexistent room join is rejected and connection closed', async () => {
 	const resolveRole: RoleResolver = async () => ({
-		error: new Response('not host', { status: 403 }),
+		error: new Response('room not found', { status: 404 }),
 	})
 	const { server } = startServer(resolveRole)
 
