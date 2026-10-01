@@ -30,11 +30,15 @@ LLM_PROVIDER=mock
 LLM_MOCK_SCRIPT=e2e/fixtures/llm-script.json
 ```
 
-Then sign up, create a room, and start it. Every LLM call pops the next canned
-response from that file, so the flow is deterministic and safe for demos and
-tests. For real musicality, set `LLM_PROVIDER=ollama` and point
-`OLLAMA_BASE_URL` at a local Ollama or at `https://ollama.com` with
-`OLLAMA_API_KEY`.
+Then sign up, create a room, and start it. Each LLM operation builds a fresh
+provider that re-reads that file from index 0 and pops responses in order, so
+the flow is deterministic and safe for demos and tests (a room start consumes
+`responses[0]` and `responses[1]`; later calls start over at `responses[0]`).
+
+For real musicality set `LLM_PROVIDER=ollama`, `OLLAMA_MODEL=<tag>` and point
+`OLLAMA_BASE_URL` at a local Ollama (`http://localhost:11434`) or at
+`https://ollama.com` with `OLLAMA_API_KEY` — `OLLAMA_MODEL` is required on that
+path.
 
 ## Docs
 

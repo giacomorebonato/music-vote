@@ -77,7 +77,7 @@ async function audioStarts(page: Page): Promise<number> {
 	)
 }
 
-/** Starter signup helper pattern (`e2e/auth.spec.ts`). */
+/** Signup helper pattern (`e2e/auth.spec.ts`). */
 async function signUp(page: Page, email: string): Promise<void> {
 	await page.goto('/login')
 	await page.getByRole('button', { name: 'Sign up' }).click()

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Bun fullstack starter: React 19 SPA (TanStack Router/Query/Form, tRPC, daisyUI v5 + Tailwind v4) on a `Bun.serve` fullstack server with tRPC v11 + better-auth over Prisma/SQLite.
+music-vote: crowd-voted AI live music on Bun — React 19 SPA (TanStack Router/Query/Form, tRPC, daisyUI v5 + Tailwind v4) on a `Bun.serve` fullstack server with tRPC v11 + better-auth over Prisma/SQLite, plus Strudel audio in the host browser. Public and AGPL-3.0 (`LICENSE`).
 
 **Bun everywhere** — runtime, package manager, bundler, test runner. Never npm/pnpm/yarn.
 

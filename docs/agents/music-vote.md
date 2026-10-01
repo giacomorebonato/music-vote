@@ -28,9 +28,9 @@ login. LLM calls happen server-side only — API keys never reach a browser.
 | `OLLAMA_BASE_URL` | no | `http://localhost:11434` | Local Ollama in dev; `https://ollama.com` for cloud in prod. |
 | `OLLAMA_MODEL` | yes (ollama) | — | Model tag, e.g. `llama3.1`. Missing → `OLLAMA_MODEL is required`. |
 | `OLLAMA_API_KEY` | no | — | Sent as `Authorization: Bearer <key>`. Ollama cloud key → Fly secret. |
-| `LLM_MOCK_SCRIPT` | yes (mock) | — | Path to `{ "responses": string[] }`; responses are popped in order and the provider throws when exhausted, so tests never hit a real model. |
+| `LLM_MOCK_SCRIPT` | yes (mock) | — | Path to `{ "responses": string[] }`. Each `getLlmProvider()` call builds a fresh provider that re-reads the file from index 0 and pops responses in order (one instance throws when exhausted), so tests never hit a real model. |
 | `SSR_CACHE_DIR` | no | `mkdtemp` dir | Bot-prerender HTML cache — see [bot-ssr.md](bot-ssr.md). |
-| `LIGHTPANDA_EXECUTABLE_PATH` | no | `~/.cache/lightpanda-node/lightpanda` | Prod sets it in the Dockerfile. Leave it unset rather than empty — an empty assignment is passed through as an empty path and silently disables bot prerender. |
+| `LIGHTPANDA_EXECUTABLE_PATH` | no | `~/.cache/lightpanda-node/lightpanda` | Prod sets it in the Dockerfile. Unset or empty falls back to the default. |
 | `MV_E2E_FAST` | test-only | — | `1` shrinks the poll open window to 5s and clamps the interval minimum to 10s (`backend/polls/scheduler.ts`). Set by `playwright.config.ts` only. |
 
 ## Local run with the mock LLM
@@ -92,9 +92,12 @@ Redeploy after code changes: `fly deploy`. Migrations run on every boot
   stop/start and wake-on-request adds a cold-start delay before the first vote
   lands. An open room holds WebSocket connections, which keeps the machine
   awake.
-- **Server restart mid-set.** `PollScheduler` rebuilds timers from the DB
-  (polls are timestamped, not tick-based): an overdue poll closes with no
-  change, and the host browser reconnects and re-applies `currentCode`.
+- **Server restart mid-set.** `backend/server.ts` awaits `bootSchedulers()`
+  (`backend/boot.ts`) once the server is listening, which runs
+  `PollScheduler.restoreSchedulers()`: live rooms are re-armed, overdue open
+  polls close with no change, and outro rooms resume or finalize (polls are
+  timestamped, not tick-based). A restore failure is logged and non-fatal — the
+  server still starts, but rooms stay orphaned until the next restart.
 - **LLM down / slow.** Polls keep running from the pre-generated question
   queue; music freezes at the last-good pattern and the host page surfaces a
   warning. The host is told, the show keeps going.

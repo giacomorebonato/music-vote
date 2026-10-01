@@ -19,4 +19,5 @@ Target: app `music-vote` on Fly.io. Infra files live in repo: `Dockerfile` (mult
 - **Redeploy** (update code, keep data): `flyctl deploy`.
 - **Replace an existing app** (fresh state, wipes data): `flyctl apps destroy music-vote` then run the first-deploy steps. The volume must be recreated.
 - **Open**: `flyctl apps open` → `https://music-vote.fly.dev`.
+- **Rename**: this repo's app and volume were renamed from the starter's `mino-starter` / `mino_starter_data` to `music-vote` / `music_vote_data`, and nothing migrates data for you — an existing starter deployment's volume is not carried over, so a fresh `fly apps create` here starts from an empty volume.
 - **Caveats**: single-machine only (SQLite volume). `better-auth` sessions rely on `BETTER_AUTH_SECRET` — rotating it logs out all users. Devtools are dev-only and excluded from the prod bundle via the `scripts/build.ts` stub plugin.
