@@ -207,5 +207,17 @@ test('factory picks MockLlmProvider when LLM_PROVIDER=mock', () => {
 
 test('factory throws for unknown LLM_PROVIDER', () => {
 	process.env.LLM_PROVIDER = 'bogus'
-	expect(() => getLlmProvider()).toThrow()
+	expect(() => getLlmProvider()).toThrow('Unknown LLM_PROVIDER: bogus')
+})
+
+test('factory treats an empty LLM_PROVIDER as unset', () => {
+	process.env.OLLAMA_MODEL = 'llama3'
+	process.env.LLM_PROVIDER = ''
+	expect(getLlmProvider()).toBeInstanceOf(OllamaProvider)
+})
+
+test('factory treats a whitespace-only LLM_PROVIDER as unset', () => {
+	process.env.OLLAMA_MODEL = 'llama3'
+	process.env.LLM_PROVIDER = '   '
+	expect(getLlmProvider()).toBeInstanceOf(OllamaProvider)
 })

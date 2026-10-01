@@ -11,9 +11,11 @@ import {
 
 // Resolve the lightpanda binary the same way @lightpanda/browser does:
 // LIGHTPANDA_EXECUTABLE_PATH wins, else ~/.cache/lightpanda-node/lightpanda.
-function lightpandaBinary(): string {
+// An empty or whitespace-only value is treated as unset — otherwise
+// execFileSync('') throws and prerender silently serves the raw SPA shell.
+export function lightpandaBinary(): string {
 	return (
-		process.env.LIGHTPANDA_EXECUTABLE_PATH ??
+		process.env.LIGHTPANDA_EXECUTABLE_PATH?.trim() ||
 		resolvePath(`${homedir()}/.cache/lightpanda-node/lightpanda`)
 	)
 }

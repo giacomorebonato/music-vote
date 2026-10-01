@@ -117,7 +117,11 @@ export class MockLlmProvider implements LlmProvider {
 }
 
 export function getLlmProvider(): LlmProvider {
-	const kind = process.env.LLM_PROVIDER ?? 'ollama'
+	// An empty or whitespace-only value is treated as unset: a deploy that sets
+	// `LLM_PROVIDER=` must fall back to the default rather than throw
+	// `Unknown LLM_PROVIDER: ` at the first room start. A non-empty unknown
+	// value still throws.
+	const kind = process.env.LLM_PROVIDER?.trim() || 'ollama'
 	if (kind === 'mock') return new MockLlmProvider()
 	if (kind === 'ollama') {
 		const model = process.env.OLLAMA_MODEL

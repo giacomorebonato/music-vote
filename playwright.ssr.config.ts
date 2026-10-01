@@ -7,7 +7,7 @@ export default defineConfig({
 	use: { baseURL: 'http://localhost:3000' },
 	webServer: {
 		command:
-			"bun run build && DATABASE_URL=file:./test.db BETTER_AUTH_SECRET='ExNy8Q9ALAjH2BEc31RrQ+KNFG4K+KjprJexVc9Xw80=' BETTER_AUTH_URL=http://localhost:3000 NODE_ENV=production SSR_CACHE_DIR=/tmp/mino-ssr-cache-e2e bun run start",
+			"bash scripts/e2e-reset-db.sh && bun run build && DATABASE_URL=file:./test.db BETTER_AUTH_SECRET='ExNy8Q9ALAjH2BEc31RrQ+KNFG4K+KjprJexVc9Xw80=' BETTER_AUTH_URL=http://localhost:3000 NODE_ENV=production SSR_CACHE_DIR=/tmp/mino-ssr-cache-e2e bun run start",
 		url: 'http://localhost:3000',
 		reuseExistingServer: !process.env.CI,
 		timeout: 60000,

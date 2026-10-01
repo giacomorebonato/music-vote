@@ -1,15 +1,10 @@
-import { execSync } from 'node:child_process'
 import { rmSync } from 'node:fs'
 
 export default async function globalSetup(): Promise<void> {
+	// DB reset is deliberately NOT here: Playwright starts the webServer before
+	// globalSetup, so wiping `prisma/test.db` from this hook deletes the file out
+	// from under the already-booted server (its next query fails with
+	// SQLITE_IOERR_VNODE). It runs in the `webServer.command` instead — see
+	// scripts/e2e-reset-db.sh.
 	rmSync('/tmp/mino-ssr-cache-e2e', { recursive: true, force: true })
-	// Fresh test DB each run without `prisma migrate reset` (which Prisma's
-	// AI-agent guard blocks when run under an agent). Deleting the SQLite file
-	// + `migrate deploy` (idempotent, non-interactive, non-destructive) gives the
-	// same clean-slate result and works in any environment.
-	rmSync('prisma/test.db', { force: true })
-	rmSync('prisma/test.db-journal', { force: true })
-	execSync('DATABASE_URL=file:./test.db bunx prisma migrate deploy', {
-		stdio: 'inherit',
-	})
 }

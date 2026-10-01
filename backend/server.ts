@@ -1,4 +1,5 @@
 import { auth } from '@backend/auth/auth'
+import { bootSchedulers } from '@backend/boot'
 import { prisma } from '@backend/db/client'
 import {
 	normalizeTrpcRequest,
@@ -137,3 +138,7 @@ const httpServer = Bun.serve<SocketData>({
 })
 
 console.log(`music-vote on http://localhost:${httpServer.port}`)
+
+// Re-arm timers for rooms that were mid-set when the process stopped. Failures
+// are logged and non-fatal (see backend/boot.ts).
+await bootSchedulers()
