@@ -619,10 +619,9 @@ test('off-option votes are ignored and do not crash', async () => {
 	scheduler.armScheduler(room.id)
 	await fakeClock.tick(0)
 
-	await vote(poll.id, 'yes', 'v1')
+	await vote(poll.id, 'invalid-choice', 'v1')
 	await vote(poll.id, 'invalid-choice', 'v2')
-	await vote(poll.id, 'no', 'v3')
-	await vote(poll.id, 'yes', 'v4')
+	await vote(poll.id, 'yes', 'v3')
 
 	await fakeClock.tick(5000)
 
@@ -634,6 +633,36 @@ test('off-option votes are ignored and do not crash', async () => {
 		where: { roomId: room.id },
 	})
 	expect(versions).toHaveLength(1)
+
+	scheduler.disarmScheduler(room.id)
+})
+
+test('all-off-option votes close with null winner and no version', async () => {
+	const host = await makeHost()
+	const room = await makeRoom(host.id, { pollIntervalSec: 10 })
+	const poll = await makePoll(room.id, 1)
+
+	scheduler.armScheduler(room.id)
+	await fakeClock.tick(0)
+
+	await vote(poll.id, 'invalid-choice', 'v1')
+	await vote(poll.id, 'other-invalid', 'v2')
+
+	await fakeClock.tick(5000)
+
+	const closed = await prisma.poll.findUnique({ where: { id: poll.id } })
+	expect(closed?.status).toBe('closed')
+	expect(closed?.winningOption).toBeNull()
+
+	const versions = await prisma.patternVersion.findMany({
+		where: { roomId: room.id },
+	})
+	expect(versions).toHaveLength(0)
+
+	const queued = await prisma.poll.findMany({
+		where: { roomId: room.id, status: 'queued' },
+	})
+	expect(queued).toHaveLength(1)
 
 	scheduler.disarmScheduler(room.id)
 })
@@ -688,6 +717,86 @@ test('end poll continue queues next evolution and keeps room live', async () => 
 		(e) => e[1].type === 'code_update' && e[1].kind === 'outro',
 	)
 	expect(outroStarted).toBe(false)
+
+	scheduler.disarmScheduler(room.id)
+})
+
+test('end poll continue sustains polling for remaining time', async () => {
+	const host = await makeHost()
+	const room = await makeRoom(host.id, {
+		lengthSec: 120,
+		pollIntervalSec: 20,
+	})
+	const endPoll = await prisma.poll.create({
+		data: {
+			roomId: room.id,
+			seq: 1,
+			kind: 'end',
+			question: 'End the set?',
+			options: [
+				{ key: 'wrap', label: 'Wrap it up' },
+				{ key: 'continue', label: 'Keep going' },
+			],
+			status: 'queued',
+		},
+	})
+
+	scheduler.armScheduler(room.id)
+	await fakeClock.tick(0)
+
+	await vote(endPoll.id, 'continue', 'v1')
+	await fakeClock.tick(5000)
+
+	// After continue, an evolution poll should be queued and opened immediately
+	let queued = await prisma.poll.findMany({
+		where: {
+			roomId: room.id,
+			kind: 'evolution',
+			status: { in: ['queued', 'open'] },
+		},
+	})
+	expect(queued).toHaveLength(1)
+
+	// First post-continue evolution poll lifecycle
+	const evo1 = queued[0]
+	await vote(evo1.id, 'yes', 'v2')
+	await fakeClock.tick(20000) // open evo1 then close it at +5s; queues evo2 around +20s
+
+	const stillLive = await prisma.room.findUnique({ where: { id: room.id } })
+	expect(stillLive?.status).toBe('live')
+
+	queued = await prisma.poll.findMany({
+		where: {
+			roomId: room.id,
+			kind: 'evolution',
+			status: { in: ['queued', 'open'] },
+		},
+	})
+	expect(queued).toHaveLength(1)
+	const evo2 = queued[0]
+	expect(evo2.seq).toBeGreaterThan(evo1.seq)
+
+	await vote(evo2.id, 'yes', 'v3')
+	await fakeClock.tick(20000)
+
+	queued = await prisma.poll.findMany({
+		where: {
+			roomId: room.id,
+			kind: 'evolution',
+			status: { in: ['queued', 'open'] },
+		},
+	})
+	expect(queued).toHaveLength(1)
+
+	const outroStarted = hostEvents().some(
+		(e) => e[1].type === 'code_update' && e[1].kind === 'outro',
+	)
+	expect(outroStarted).toBe(false)
+
+	const endPolls = await prisma.poll.findMany({
+		where: { roomId: room.id, kind: 'end' },
+	})
+	expect(endPolls).toHaveLength(1)
 
 	scheduler.disarmScheduler(room.id)
 })

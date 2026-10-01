@@ -52,6 +52,7 @@ type RoomScheduler = {
 	intervalHandle?: unknown
 	pollCloseHandle?: unknown
 	outroHandle?: unknown
+	continuing?: boolean
 }
 
 const active = new Map<string, RoomScheduler>()
@@ -334,6 +335,8 @@ async function closePoll(pollId: string, roomId: string): Promise<void> {
 			if (winner === 'wrap') {
 				await triggerEndRoom(roomId, room.hostId)
 			} else if (winner === 'continue') {
+				const current = active.get(roomId)
+				if (current) current.continuing = true
 				await queueNextEvolution(roomId, room, { afterContinue: true })
 				await openNextQueuedPoll(roomId)
 			}
@@ -427,6 +430,12 @@ async function queueNextEvolution(
 	if (!opts?.afterContinue) {
 		if (now >= insertAt) return
 		if (now + intervalMs >= insertAt) return
+	}
+
+	const scheduler = active.get(roomId)
+	if (scheduler?.continuing && now >= insertAt) {
+		const endAt = room.createdAt.getTime() + room.lengthSec * 1000
+		if (now + intervalMs >= endAt) return
 	}
 
 	const last = await prisma.poll.findFirst({
@@ -532,12 +541,12 @@ function pickWinner(
 	votes: { choice: string }[],
 	pollId: string,
 ): string | null {
-	if (votes.length === 0) return null
 	const counts = tallyVotes(votes, options)
 	let max = -1
 	for (const count of counts.values()) {
 		if (count > max) max = count
 	}
+	if (max === 0) return null
 	const tied = options.filter((option) => counts.get(option.key) === max)
 	if (tied.length === 1) return tied[0].key
 	const seed = hashStringToSeed(pollId)
