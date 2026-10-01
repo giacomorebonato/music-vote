@@ -10,6 +10,7 @@ import {
 import { execSync } from 'node:child_process'
 import { resolve } from 'node:path'
 import { MockLlmProvider } from '@backend/llm/provider'
+import { generateInitialPattern, generateOutro } from '@backend/music/engine'
 import type { Context } from '@backend/trpc/context'
 import type { WsEvent } from '@shared/realtime/events'
 import { PrismaBunSqlite } from 'prisma-adapter-bun-sqlite'
@@ -105,12 +106,15 @@ test('startRoom is atomic: question-gen throw leaves room lobby with zero versio
 	const host = await makeHost()
 	const room = await service.createRoom(host.id, baseInput())
 
-	mockProvider = new MockLlmProvider(['s("bd sd cp hh")'])
-	mockProvider.chat = async () => {
-		throw new Error('question generation failed')
-	}
-
-	await expect(service.startRoom(room.id, host.id)).rejects.toThrow()
+	await expect(
+		service.startRoom(room.id, host.id, {
+			generateInitialPattern,
+			generateNextQuestion: async () => {
+				throw new Error('question generation failed')
+			},
+			generateOutro,
+		}),
+	).rejects.toThrow('question generation failed')
 
 	const updated = await prisma.room.findUnique({ where: { id: room.id } })
 	expect(updated?.status).toBe('lobby')

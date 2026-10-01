@@ -14,6 +14,18 @@ import type { Prisma, Room } from '../../prisma/generated/client'
 
 type CreateRoomInput = z.infer<typeof createRoomSchema>
 
+type EngineDeps = {
+	generateInitialPattern: typeof generateInitialPattern
+	generateNextQuestion: typeof generateNextQuestion
+	generateOutro: typeof generateOutro
+}
+
+const defaultEngine: EngineDeps = {
+	generateInitialPattern,
+	generateNextQuestion,
+	generateOutro,
+}
+
 export async function createRoom(
 	hostId: string,
 	input: CreateRoomInput,
@@ -31,7 +43,11 @@ export async function createRoom(
 	})
 }
 
-export async function startRoom(roomId: string, hostId: string): Promise<void> {
+export async function startRoom(
+	roomId: string,
+	hostId: string,
+	engine: EngineDeps = defaultEngine,
+): Promise<void> {
 	const room = await prisma.room.findUnique({ where: { id: roomId } })
 	if (!room || room.hostId !== hostId) {
 		throw new Error('Room not found or access denied')
@@ -41,11 +57,11 @@ export async function startRoom(roomId: string, hostId: string): Promise<void> {
 	}
 
 	const provider = getLlmProvider()
-	const { code, doc } = await generateInitialPattern(provider, {
+	const { code, doc } = await engine.generateInitialPattern(provider, {
 		genre: room.genre,
 		bpm: room.bpm,
 	})
-	const question = await generateNextQuestion(provider, doc)
+	const question = await engine.generateNextQuestion(provider, doc)
 	const now = new Date()
 	const version = await prisma.patternVersion.create({
 		data: {
@@ -102,7 +118,11 @@ async function finalizeRoomEnd(roomId: string): Promise<void> {
 	hub.publishHost(roomId, { type: 'room_status', status: 'ended' })
 }
 
-export async function endRoom(roomId: string, hostId: string): Promise<void> {
+export async function endRoom(
+	roomId: string,
+	hostId: string,
+	engine: EngineDeps = defaultEngine,
+): Promise<void> {
 	const room = await prisma.room.findUnique({ where: { id: roomId } })
 	if (!room || room.hostId !== hostId) {
 		throw new Error('Room not found or access denied')
@@ -120,7 +140,11 @@ export async function endRoom(roomId: string, hostId: string): Promise<void> {
 
 	const provider = getLlmProvider()
 	const doc = room.stateDoc as unknown as StateDoc
-	const outroCode = await generateOutro(provider, doc, room.currentCode ?? '')
+	const outroCode = await engine.generateOutro(
+		provider,
+		doc,
+		room.currentCode ?? '',
+	)
 	const version = await prisma.patternVersion.create({
 		data: {
 			roomId,
