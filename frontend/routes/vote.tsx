@@ -1,0 +1,250 @@
+import type { PollCardPoll, SummaryPoll } from '@frontend/components/poll-card'
+import { PollCard, PollTimeline } from '@frontend/components/poll-card'
+import { useRoomChannel } from '@frontend/lib/room-ws'
+import { useTRPC } from '@frontend/lib/trpc'
+import type { WsEvent } from '@shared/realtime/events'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+
+type VoteSelection = { pollId: string; choice: string | null }
+
+type VoteViewProps = {
+	roomStatus: string | null
+	poll: PollCardPoll | null
+	selection: VoteSelection | null
+	countdownSeconds: number | null
+	pending: boolean
+	error: string | null
+	loadError: string | null
+	summaryPolls: SummaryPoll[] | null
+	onVote: (choice: string) => void
+}
+
+/** Anonymous vote page reached by scanning the host's QR code. */
+export function VoteRoute({ roomId }: { roomId: string }) {
+	const trpc = useTRPC()
+	const pollQuery = useQuery(trpc.voting.currentPoll.queryOptions({ roomId }))
+	const refetchPoll = pollQuery.refetch
+	const roomStatus = pollQuery.data?.roomStatus ?? null
+	const poll = pollQuery.data?.poll ?? null
+	const ended = roomStatus === 'ended'
+
+	const summaryQuery = useQuery({
+		...trpc.voting.summary.queryOptions({ roomId }),
+		enabled: ended,
+	})
+
+	const claimSession = useMutation(trpc.voting.claimSession.mutationOptions())
+	const castVote = useMutation(trpc.voting.castVote.mutationOptions())
+
+	const [selection, setSelection] = useState<VoteSelection | null>(null)
+	const [error, setError] = useState<string | null>(null)
+	const [nowMs, setNowMs] = useState(() => Date.now())
+
+	const claimRef = useRef<Promise<unknown> | null>(null)
+	const reconciledRef = useRef<string | null>(null)
+
+	// Anonymous session: claim the mv_session cookie once. handleVote awaits
+	// this promise so a fast tap cannot outrun the cookie set.
+	useEffect(() => {
+		if (claimRef.current) return
+		claimRef.current = claimSession.mutateAsync()
+	}, [claimSession])
+
+	// One ticker drives every countdown; cleared on unmount so navigating away
+	// cannot leak an interval.
+	useEffect(() => {
+		const handle = setInterval(() => setNowMs(Date.now()), 1000)
+		return () => clearInterval(handle)
+	}, [])
+
+	const reconcile = useCallback(() => {
+		void refetchPoll()
+	}, [refetchPoll])
+
+	const handleEvent = useCallback(
+		(event: WsEvent) => {
+			switch (event.type) {
+				// The payload carries option labels only (no keys) and no tally, so a
+				// refetch of currentPoll is the source of truth after any lifecycle
+				// change or room end.
+				case 'poll_opened':
+				case 'poll_closed':
+				case 'room_ended':
+					reconcile()
+					break
+				default:
+					break
+			}
+		},
+		[reconcile],
+	)
+
+	// A reconnect may have missed poll lifecycle while the socket was down, so
+	// resync unconditionally.
+	useRoomChannel(roomId, { onEvent: handleEvent, onReconnect: reconcile })
+
+	const closesAtMs = poll?.closesAt ? Date.parse(poll.closesAt) : null
+	const hasDeadline = closesAtMs !== null && !Number.isNaN(closesAtMs)
+	const pollExpired = hasDeadline && nowMs >= closesAtMs
+	// A host `skip` publishes no poll_closed to the audience, and currentPoll can
+	// return an open poll already past closesAt. Treat an expired poll as gone and
+	// refetch once per poll id so the phone never sits on a dead poll.
+	const activePoll = pollExpired ? null : poll
+
+	useEffect(() => {
+		if (!pollExpired || poll === null) return
+		if (reconciledRef.current === poll.id) return
+		reconciledRef.current = poll.id
+		reconcile()
+	}, [pollExpired, poll, reconcile])
+
+	const handleVote = useCallback(
+		async (choice: string) => {
+			if (!activePoll) return
+			setError(null)
+			try {
+				// The mount effect starts the claim; awaiting it closes the window where a
+				// fast tap could beat the mv_session cookie.
+				await (claimRef.current ?? Promise.resolve())
+				await castVote.mutateAsync({ pollId: activePoll.id, choice })
+				setSelection({ pollId: activePoll.id, choice })
+			} catch (cause) {
+				const message = cause instanceof Error ? cause.message : 'Vote failed'
+				if (message.includes('ALREADY_VOTED')) {
+					// This phone already voted on this poll and cannot re-vote (the
+					// server keeps no per-phone choice to re-highlight). Show counted.
+					setSelection({ pollId: activePoll.id, choice: null })
+					return
+				}
+				setError(message)
+				// POLL_CLOSED / stale poll: refetch instead of trusting the dead poll.
+				reconcile()
+			}
+		},
+		[activePoll, castVote, reconcile],
+	)
+
+	const selectionForPoll =
+		selection && activePoll && selection.pollId === activePoll.id
+			? selection
+			: null
+	const countdownSeconds = hasDeadline
+		? Math.max(0, Math.ceil((closesAtMs - nowMs) / 1000))
+		: null
+
+	return (
+		<VoteView
+			roomStatus={roomStatus}
+			poll={activePoll}
+			selection={selectionForPoll}
+			countdownSeconds={activePoll ? countdownSeconds : null}
+			pending={castVote.isPending}
+			error={error}
+			loadError={pollQuery.error?.message ?? null}
+			summaryPolls={ended ? (summaryQuery.data?.polls ?? []) : null}
+			onVote={(choice) => {
+				void handleVote(choice)
+			}}
+		/>
+	)
+}
+
+/**
+ * Presentational page body. Kept separate from the data wiring so lobby /
+ * waiting / poll / ended states render directly from props.
+ */
+export function VoteView({
+	roomStatus,
+	poll,
+	selection,
+	countdownSeconds,
+	pending,
+	error,
+	loadError,
+	summaryPolls,
+	onVote,
+}: VoteViewProps) {
+	let body: ReactNode
+	if (roomStatus === null) {
+		body = <span className="loading loading-spinner mx-auto" />
+	} else if (roomStatus === 'lobby') {
+		body = (
+			<WaitingStage
+				testId="waiting-dj"
+				title="Waiting for the DJ"
+				detail="The set hasn't started yet — keep this page open."
+			/>
+		)
+	} else if (roomStatus === 'ended') {
+		body = <PollTimeline polls={summaryPolls ?? []} />
+	} else if (roomStatus === 'outro') {
+		body = (
+			<WaitingStage
+				testId="waiting-outro"
+				title="Wrapping up"
+				detail="The set is ending — no more votes."
+			/>
+		)
+	} else if (poll) {
+		body = (
+			<PollCard
+				question={poll.question}
+				options={poll.options}
+				selectedKey={selection?.choice ?? null}
+				voted={selection !== null}
+				countdownSeconds={countdownSeconds}
+				pending={pending}
+				onVote={onVote}
+			/>
+		)
+	} else {
+		body = (
+			<WaitingStage
+				testId="waiting-poll"
+				title="Waiting for the next poll"
+				detail="A new question is coming up — vote when it appears."
+			/>
+		)
+	}
+
+	return (
+		<div className="mx-auto flex min-h-screen w-full max-w-md flex-col justify-center gap-6 px-4 py-10">
+			<header className="flex flex-col items-center gap-1">
+				<span className="eyebrow">music vote</span>
+			</header>
+			{loadError ? (
+				<div className="alert alert-error" data-testid="vote-error">
+					<span>{loadError}</span>
+				</div>
+			) : null}
+			{error ? (
+				<div className="alert alert-warning" data-testid="vote-error">
+					<span>{error}</span>
+				</div>
+			) : null}
+			{body}
+		</div>
+	)
+}
+
+function WaitingStage({
+	testId,
+	title,
+	detail,
+}: {
+	testId: string
+	title: string
+	detail: string
+}) {
+	return (
+		<div className="card bg-base-100 shadow-xl" data-testid={testId}>
+			<div className="card-body items-center gap-2 text-center">
+				<h2 className="font-bold text-xl">{title}</h2>
+				<p className="text-sm opacity-70">{detail}</p>
+				<span className="loading loading-dots" />
+			</div>
+		</div>
+	)
+}

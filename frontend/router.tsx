@@ -2,6 +2,7 @@ import { CreateRoute } from '@frontend/routes/create'
 import { HomeRoute } from '@frontend/routes/home'
 import { HostRoute } from '@frontend/routes/host'
 import { LoginRoute } from '@frontend/routes/login'
+import { VoteRoute } from '@frontend/routes/vote'
 import {
 	createRootRoute,
 	createRoute,
@@ -43,11 +44,23 @@ function HostRouteContainer() {
 	return <HostRoute roomId={id} />
 }
 
+const voteRoute = createRoute({
+	getParentRoute: () => rootRoute,
+	path: '/r/$id',
+	component: VoteRouteContainer,
+})
+
+function VoteRouteContainer() {
+	const { id } = voteRoute.useParams()
+	return <VoteRoute roomId={id} />
+}
+
 const routeTree = rootRoute.addChildren([
 	homeRoute,
 	loginRoute,
 	createRoomRoute,
 	hostRoute,
+	voteRoute,
 ])
 
 export const router = createRouter({ routeTree, defaultPreload: 'intent' })
