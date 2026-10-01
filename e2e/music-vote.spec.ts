@@ -127,6 +127,8 @@ test('host runs a set that the audience votes through, undoes, and ends', async 
 	await host.getByTestId('create-room').click()
 	await expect(host).toHaveURL(/\/r\/[^/]+\/host/)
 	await expect(host.getByTestId('room-status')).toHaveText('lobby')
+	// Step 1 of the brief: the host page shows the scannable QR, not just the URL.
+	await expect(host.getByTestId('qr-code')).toBeVisible({ timeout: 15_000 })
 	const voteUrl = (await host.getByTestId('vote-url').innerText()).trim()
 
 	// Both phones open the QR target and wait in the lobby. They are already
@@ -198,10 +200,13 @@ test('host runs a set that the audience votes through, undoes, and ends', async 
 	await expect(phoneA.getByTestId('vote-error')).toHaveCount(0)
 
 	// Two accepted votes, not three: the duplicate was rejected by the server.
+	// Read the count element's own text — a substring match would also accept
+	// "12"/"20".
 	const hostOptionRow = host.getByTestId(`poll-option-${optionKey}`)
+	const hostTally = hostOptionRow.locator('span').last()
 	await expect
-		.poll(async () => hostOptionRow.innerText(), { timeout: 10_000 })
-		.toContain('2')
+		.poll(async () => (await hostTally.innerText()).trim(), { timeout: 10_000 })
+		.toBe('2')
 
 	// --- poll 1 closes: the winning option drives the evolution ----------
 	await expect(host.getByTestId('apply-status')).toHaveText('change applied', {

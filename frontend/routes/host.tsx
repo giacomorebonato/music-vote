@@ -6,6 +6,12 @@ import {
 import { AppLayout } from '@frontend/components/app-layout'
 import { PollMonitor } from '@frontend/components/poll-monitor'
 import { QrCode } from '@frontend/components/qr-code'
+import {
+	type ApplyStatus,
+	type ApplyStatusFact,
+	initialApplyStatusState,
+	reduceApplyStatus,
+} from '@frontend/lib/apply-status'
 import { authClient } from '@frontend/lib/auth'
 import { useRoomChannel } from '@frontend/lib/room-ws'
 import { useTRPC } from '@frontend/lib/trpc'
@@ -13,11 +19,6 @@ import type { CodeUpdateEvent, WsEvent } from '@shared/realtime/events'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
-
-type ApplyStatus = {
-	text: string
-	tone: 'success' | 'error' | 'warning'
-}
 
 // Written as whole class literals so Tailwind/daisyUI emits them.
 const APPLY_STATUS_CLASS: Record<ApplyStatus['tone'], string> = {
@@ -64,7 +65,9 @@ function HostConsole({ roomId }: { roomId: string }) {
 
 	const [playerCode, setPlayerCode] = useState<string | null>(null)
 	const [displayCode, setDisplayCode] = useState<string | null>(null)
-	const [applyStatus, setApplyStatus] = useState<ApplyStatus | null>(null)
+	const [applyStatusState, setApplyStatusState] = useState(
+		initialApplyStatusState,
+	)
 	const [voteTally, setVoteTally] = useState<{
 		pollId: string
 		counts: Record<string, number>
@@ -75,6 +78,10 @@ function HostConsole({ roomId }: { roomId: string }) {
 	const seededRef = useRef(false)
 	const appliedCodeRef = useRef<string | null>(null)
 	const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+	// Monotonic badge tokens, and the token reserved by an Undo click so the
+	// undo's own `code_update` frame shares it (see `frontend/lib/apply-status`).
+	const applySeqRef = useRef(0)
+	const pendingUndoSeqRef = useRef<number | null>(null)
 
 	const startRoom = useMutation(trpc.rooms.start.mutationOptions())
 	const undoChange = useMutation(trpc.rooms.undo.mutationOptions())
@@ -85,6 +92,24 @@ function HostConsole({ roomId }: { roomId: string }) {
 	)
 
 	const refetchRoom = roomQuery.refetch
+
+	const dispatchApplyStatus = useCallback((fact: ApplyStatusFact) => {
+		setApplyStatusState((state) => reduceApplyStatus(state, fact))
+	}, [])
+
+	/**
+	 * Claim the next badge token. Every operation that may write the badge calls
+	 * this when it starts, so a result that completes out of order is rejected as
+	 * superseded instead of overwriting the newer operation's badge.
+	 */
+	const beginApplyOperation = useCallback((): number => {
+		applySeqRef.current += 1
+		const seq = applySeqRef.current
+		setApplyStatusState((state) =>
+			reduceApplyStatus(state, { type: 'start', seq }),
+		)
+		return seq
+	}, [])
 
 	const showToast = useCallback((message: string) => {
 		setToast(message)
@@ -133,6 +158,44 @@ function HostConsole({ roomId }: { roomId: string }) {
 		[showToast],
 	)
 
+	const reportApply = useCallback(
+		(event: CodeUpdateEvent, result: ApplyResult) => {
+			// `initial` and `undo` versions are already marked applied server-side;
+			// reportApplyResult only accepts candidates.
+			if (event.kind !== 'evolution' && event.kind !== 'outro') return
+			reportApplyResult.mutate(
+				{
+					roomId,
+					versionId: event.versionId,
+					ok: result.ok,
+					error: result.ok ? undefined : result.error,
+				},
+				{
+					onError: (error) => {
+						showToast(`Change not confirmed: ${error.message}`)
+					},
+				},
+			)
+		},
+		[reportApplyResult, roomId, showToast],
+	)
+
+	/**
+	 * Resolve the badge token for an incoming `code_update`. The undo frame
+	 * belongs to the Undo click that is already in flight, so it reuses the token
+	 * that click reserved; any other frame claims a fresh one.
+	 */
+	const claimSeqForFrame = useCallback(
+		(kind: CodeUpdateEvent['kind']): number => {
+			if (kind !== 'undo') return beginApplyOperation()
+			const reserved = pendingUndoSeqRef.current
+			if (reserved === null) return beginApplyOperation()
+			pendingUndoSeqRef.current = null
+			return reserved
+		},
+		[beginApplyOperation],
+	)
+
 	const handleCodeUpdate = useCallback(
 		(event: CodeUpdateEvent) => {
 			const player = playerRef.current
@@ -143,35 +206,28 @@ function HostConsole({ roomId }: { roomId: string }) {
 				return
 			}
 			appliedCodeRef.current = event.code
+			const seq = claimSeqForFrame(event.kind)
+			// The host asked for this revert, so its outcome is `reverted` whichever
+			// writer reports it (the undo frame or the mutation response).
+			const successFact: ApplyStatusFact =
+				event.kind === 'undo'
+					? { type: 'reverted', seq }
+					: { type: 'applied', seq }
 			void player.applyPattern(event.code).then((result) => {
 				if (result.ok) {
 					setDisplayCode(event.code)
-					setApplyStatus({ text: 'change applied', tone: 'success' })
+					dispatchApplyStatus(successFact)
 				} else {
-					setApplyStatus({
-						text: `change rejected: ${result.error}`,
-						tone: 'error',
+					dispatchApplyStatus({
+						type: 'failed',
+						seq,
+						error: result.error,
 					})
 				}
-				// `initial` and `undo` versions are already marked applied
-				// server-side; reportApplyResult only accepts candidates.
-				if (event.kind !== 'evolution' && event.kind !== 'outro') return
-				reportApplyResult.mutate(
-					{
-						roomId,
-						versionId: event.versionId,
-						ok: result.ok,
-						error: result.ok ? undefined : result.error,
-					},
-					{
-						onError: (error) => {
-							showToast(`Change not confirmed: ${error.message}`)
-						},
-					},
-				)
+				reportApply(event, result)
 			})
 		},
-		[reportApplyResult, roomId, showToast],
+		[claimSeqForFrame, dispatchApplyStatus, reportApply],
 	)
 
 	const handleEvent = useCallback(
@@ -194,9 +250,12 @@ function HostConsole({ roomId }: { roomId: string }) {
 					showToast(event.message)
 					break
 				case 'pattern_rejected':
-					setApplyStatus({
-						text: `change rejected: ${event.error}`,
-						tone: 'error',
+					// Backstop for a rejected apply the browser could not confirm; it
+					// belongs to the newest operation.
+					dispatchApplyStatus({
+						type: 'failed',
+						seq: applySeqRef.current,
+						error: event.error,
 					})
 					break
 				case 'room_status':
@@ -206,7 +265,7 @@ function HostConsole({ roomId }: { roomId: string }) {
 					break
 			}
 		},
-		[handleCodeUpdate, refetchRoom, showToast],
+		[dispatchApplyStatus, handleCodeUpdate, refetchRoom, showToast],
 	)
 
 	// Spec "Host WS drop": the browser is the audio engine, so a dropped socket
@@ -367,15 +426,21 @@ function HostConsole({ roomId }: { roomId: string }) {
 								data-testid="undo"
 								disabled={undoChange.isPending}
 								onClick={() => {
+									// Reserve the badge token before the request goes out: the undo
+									// frame arrives on the socket and reuses it, so the frame and the
+									// mutation response always agree on the outcome.
+									const seq = beginApplyOperation()
+									pendingUndoSeqRef.current = seq
 									undoChange.mutate(
 										{ roomId },
 										{
 											onSuccess: () => {
-												setApplyStatus({
-													text: 'reverted',
-													tone: 'warning',
-												})
+												dispatchApplyStatus({ type: 'reverted', seq })
 												void refetchRoom()
+											},
+											onError: () => {
+												// No undo happened, so no frame will claim the token.
+												pendingUndoSeqRef.current = null
 											},
 										},
 									)
@@ -425,12 +490,12 @@ function HostConsole({ roomId }: { roomId: string }) {
 					keyboard-only activation.
 				</p>
 
-				{applyStatus ? (
+				{applyStatusState.status ? (
 					<span
-						className={`badge ${APPLY_STATUS_CLASS[applyStatus.tone]}`}
+						className={`badge ${APPLY_STATUS_CLASS[applyStatusState.status.tone]}`}
 						data-testid="apply-status"
 					>
-						{applyStatus.text}
+						{applyStatusState.status.text}
 					</span>
 				) : null}
 
