@@ -132,7 +132,7 @@ Each is pinned by a test named below in its owning task.
 - Modify: `backend/server.ts` (add `websocket` handler + `/ws` upgrade; keep existing route map intact)
 
 **Interfaces:**
-- Produces: WS event types — audience: `poll_opened {poll}`, `poll_closed {pollId, winningOption|null}`, `room_ended`; host: `code_update {code, versionId, kind:'initial'|'evolution'|'undo'|'outro'}`, `vote_count {pollId, yes, no}`, `room_status {status}`, `warning {message}`, `pattern_rejected {versionId, error}` (discriminated union `WsEvent` in `shared/realtime/events.ts`).
+- Produces: WS event types — audience: `poll_opened {poll}`, `poll_closed {pollId, winningOption|null}`, `room_ended`; host: `code_update {code, versionId, kind:'initial'|'evolution'|'undo'|'outro'}`, `vote_count {pollId, counts: Record<string, number>}` (per-option counts keyed by poll option key — widened from `{yes, no}` by controller ruling after Task 10 review, since end polls use `wrap`/`continue`), `room_status {status}`, `warning {message}`, `pattern_rejected {versionId, error}` (discriminated union `WsEvent` in `shared/realtime/events.ts`).
 - Produces: `hub.joinRoom(ws, roomId, role, isHost)`; `hub.publishAudience(roomId, event)`; `hub.publishHost(roomId, event)` — in `backend/realtime/hub.ts`. Host-channel join verified against better-auth session (cookie on upgrade) + room ownership; audience join open.
 - WS URL: `/ws?room=<roomId>`; role derived server-side (host iff session matches room host).
 
@@ -219,7 +219,7 @@ Each is pinned by a test named below in its owning task.
 **Interfaces:**
 - Consumes: `roomsRouter` (Task 8), `votingRouter.claimSession` not needed here; `WsEvent` + `/ws?room=` client (Task 7), `StrudelPlayer` (Task 11), `qrcode` dep.
 - Produces: `frontend/lib/room-ws.ts` → `useRoomChannel(roomId, opts: { onEvent: (e: WsEvent) => void }): { connected: boolean }` (auto-reconnect, backoff 1s→10s).
-- Host page behavior: on mount fetch `rooms.get` → render `StrudelPlayer` with `code=currentCode`; on WS reconnect (spec failure row "Host WS drop"): refetch `rooms.get` and re-apply `currentCode` via `applyPattern`; `code_update` events → `applyPattern` → `onApplyResult` → `rooms.reportApplyResult({roomId, versionId, ok, error})`; buttons undo/skip/end → tRPC mutations; QR = `${origin}/r/${roomId}`; `vote_count` → PollMonitor bars; `warning` → toast; ended → link to summary. Create page: form (genre, BPM, length, interval) → `rooms.create` → navigate to host page → start button.
+- Host page behavior: on mount fetch `rooms.get` → render `StrudelPlayer` with `code=currentCode`; on WS reconnect (spec failure row "Host WS drop"): refetch `rooms.get` and re-apply `currentCode` via `applyPattern`; `code_update` events → `applyPattern` → `onApplyResult` → `rooms.reportApplyResult({roomId, versionId, ok, error})`; buttons undo/skip/end → tRPC mutations; QR = `${origin}/r/${roomId}`; `vote_count` → PollMonitor bars rendered generically from `counts` keyed by the open poll's option keys (controller ruling: no yes/no hardcoding — end polls are wrap/continue); `warning` → toast; ended → link to summary. Create page: form (genre, BPM, length, interval) → `rooms.create` → navigate to host page → start button.
 
 - [ ] **Step 1: Failing unit test** — `qr-code.test.ts`: renders `<img>` with data URL prefix `data:image/png` for input URL; `room-ws` test: fake `WebSocket` (injected factory) — reconnects after close, calls onEvent for message.
 - [ ] **Step 2: Run** — FAIL.
