@@ -1,35 +1,34 @@
+process.env.DATABASE_URL = 'file:./models-test.db'
+
 import { afterAll, expect, test } from 'bun:test'
 import { execSync } from 'node:child_process'
-import { resolve } from 'node:path'
 import { createRoomSchema } from '@shared/schemas/room'
-import { PrismaBunSqlite } from 'prisma-adapter-bun-sqlite'
-import { PrismaClient } from '../../../prisma/generated/client'
 
-// Unit tests run against a real, migrated SQLite file (prisma/test.db) instead of
-// the dev DB: CI runs `bun run check` without applying migrations to dev.db, so
-// the test applies the committed migrations to test.db itself before connecting.
-const testDbPath = resolve(
-	import.meta.dir,
-	'..',
-	'..',
-	'..',
-	'prisma',
-	'test.db',
-)
-
-execSync('DATABASE_URL=file:./test.db bunx prisma migrate deploy', {
+// Unit tests run against a real, migrated SQLite file (prisma/models-test.db)
+// instead of the dev DB: CI runs `bun run check` without applying migrations to
+// dev.db, and a cold checkout has no DB at all.
+//
+// Every DB-backed test file owns its own `prisma/<name>-test.db` and migrates it
+// itself before connecting. Unique paths are what make these module-load
+// migrations race-free: `bun test --parallel` runs the files in separate worker
+// processes, and two `prisma migrate deploy` runs against the same fresh SQLite
+// file deadlock (`database is locked`) and leave it schema-less. The migrate is
+// idempotent, so it is also what makes a bare `bun test` work on a cold tree.
+//
+// The client comes from the shared singleton the services use, so writes and
+// assertions can never diverge onto two different files.
+execSync('DATABASE_URL=file:./models-test.db bunx prisma migrate deploy', {
 	stdio: 'pipe',
 })
 
-const prisma = new PrismaClient({
-	adapter: new PrismaBunSqlite({ url: `file:${testDbPath}` }),
-})
+const { prisma } = await import('@backend/db/client')
 
 const hostEmail = `host-${crypto.randomUUID()}@example.com`
 
 afterAll(async () => {
+	// No $disconnect here: `prisma` is the process-wide client every service
+	// shares, so closing it would break test files that run later in this process.
 	await prisma.user.deleteMany({ where: { email: hostEmail } })
-	await prisma.$disconnect()
 })
 
 test('vote dedup: second vote same token+poll throws P2002', async () => {

@@ -10,29 +10,19 @@ import {
 	test,
 } from 'bun:test'
 import { execSync } from 'node:child_process'
-import { resolve } from 'node:path'
 import type { Context } from '@backend/trpc/context'
 import type { WsEvent } from '@shared/realtime/events'
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch'
-import { PrismaBunSqlite } from 'prisma-adapter-bun-sqlite'
-import { PrismaClient } from '../../../prisma/generated/client'
 
-const testDbPath = resolve(
-	import.meta.dir,
-	'..',
-	'..',
-	'..',
-	'prisma',
-	'votes-test.db',
-)
-
+// Own the DB: prisma/votes-test.db, migrated before connecting. Unique per
+// DB-backed test file so the module-load `migrate deploy` runs cannot collide
+// under `bun test --parallel` (and the shared client below is the same one the
+// services use, so assertions and writes never diverge).
 execSync('DATABASE_URL=file:./votes-test.db bunx prisma migrate deploy', {
 	stdio: 'pipe',
 })
 
-const prisma = new PrismaClient({
-	adapter: new PrismaBunSqlite({ url: `file:${testDbPath}` }),
-})
+const { prisma } = await import('@backend/db/client')
 
 const createdUserIds: string[] = []
 let service: typeof import('@backend/votes/service')
@@ -128,8 +118,9 @@ beforeEach(() => {
 })
 
 afterAll(async () => {
+	// No $disconnect here: `prisma` is the process-wide client every service
+	// shares, so closing it would break test files that run later in this process.
 	await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } })
-	await prisma.$disconnect()
 })
 
 test('claimSession returns a token and sets the mv_session cookie header', async () => {
