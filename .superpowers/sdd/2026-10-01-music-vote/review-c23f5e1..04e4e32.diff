@@ -1,0 +1,398 @@
+# Review package: c23f5e1..04e4e32
+
+## Commits
+04e4e32 feat(llm): provider interface, ollama impl, test mock
+
+## Files changed
+ .env.example                           |  14 ++-
+ backend/llm/__tests__/provider.test.ts | 211 +++++++++++++++++++++++++++++++++
+ backend/llm/provider.ts                | 134 +++++++++++++++++++++
+ 3 files changed, 358 insertions(+), 1 deletion(-)
+
+## Diff
+diff --git a/.env.example b/.env.example
+index 16dfd72..17942c1 100644
+--- a/.env.example
++++ b/.env.example
+@@ -1,9 +1,21 @@
+ DATABASE_URL=file:./dev.db
+ BETTER_AUTH_SECRET=replace-with-openssl-rand-base64-32
+ BETTER_AUTH_URL=http://localhost:3000
+ PORT=3000
+ 
+ # Bot prerender (optional; prod-only). Renders bot requests via the Lightpanda
+ # binary shipped by `@lightpanda/browser`'s postinstall.
+ SSR_CACHE_DIR=
+-LIGHTPANDA_EXECUTABLE_PATH=
+\ No newline at end of file
++LIGHTPANDA_EXECUTABLE_PATH=
++
++# LLM provider: `ollama` (default) or `mock` (scripted responses for tests)
++LLM_PROVIDER=ollama
++
++# Ollama endpoint (local dev server, or https://ollama.com for cloud)
++OLLAMA_BASE_URL=http://localhost:11434
++
++# Ollama model tag, e.g. llama3.1
++OLLAMA_MODEL=
++
++# Ollama cloud subscription key; sent as `Authorization: Bearer <key>` when set
++OLLAMA_API_KEY=
+\ No newline at end of file
+diff --git a/backend/llm/__tests__/provider.test.ts b/backend/llm/__tests__/provider.test.ts
+new file mode 100644
+index 0000000..1bab57f
+--- /dev/null
++++ b/backend/llm/__tests__/provider.test.ts
+@@ -0,0 +1,211 @@
++import { afterEach, beforeEach, expect, test } from 'bun:test'
++import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
++import { tmpdir } from 'node:os'
++import { join } from 'node:path'
++import {
++	getLlmProvider,
++	MockLlmProvider,
++	OllamaProvider,
++} from '@backend/llm/provider'
++
++const LLM_ENV_KEYS = [
++	'LLM_PROVIDER',
++	'LLM_MOCK_SCRIPT',
++	'OLLAMA_BASE_URL',
++	'OLLAMA_MODEL',
++	'OLLAMA_API_KEY',
++] as const
++
++const originalFetch = globalThis.fetch
++
++beforeEach(() => {
++	for (const key of LLM_ENV_KEYS) delete process.env[key]
++})
++
++afterEach(() => {
++	for (const key of LLM_ENV_KEYS) delete process.env[key]
++	globalThis.fetch = originalFetch
++})
++
++type FetchCall = { url: string; init: RequestInit }
++
++function stubFetch(response: unknown): FetchCall[] {
++	const calls: FetchCall[] = []
++	globalThis.fetch = (async (
++		input: string | URL | Request,
++		init?: RequestInit,
++	) => {
++		calls.push({ url: String(input), init: init ?? {} })
++		return new Response(JSON.stringify(response), {
++			status: 200,
++			headers: { 'content-type': 'application/json' },
++		})
++	}) as typeof fetch
++	return calls
++}
++
++function writeScriptFile(responses: string[]): { dir: string; path: string } {
++	const dir = mkdtempSync(join(tmpdir(), 'mv-llm-'))
++	const path = join(dir, 'llm-script.json')
++	writeFileSync(path, JSON.stringify({ responses }))
++	return { dir, path }
++}
++
++// --- MockLlmProvider ---
++
++test('mock returns scripted responses in order', async () => {
++	const provider = new MockLlmProvider(['first', 'second'])
++	expect(await provider.chat('a')).toBe('first')
++	expect(await provider.chat('b')).toBe('second')
++})
++
++test('mock throws on exhaustion', async () => {
++	const provider = new MockLlmProvider(['only'])
++	await provider.chat('a')
++	await expect(provider.chat('b')).rejects.toThrow()
++})
++
++test('mock constructor responses win over LLM_MOCK_SCRIPT', async () => {
++	const { dir, path } = writeScriptFile(['from-file'])
++	try {
++		process.env.LLM_MOCK_SCRIPT = path
++		const provider = new MockLlmProvider(['from-constructor'])
++		expect(await provider.chat('a')).toBe('from-constructor')
++	} finally {
++		rmSync(dir, { recursive: true, force: true })
++	}
++})
++
++test('mock reads LLM_MOCK_SCRIPT file when no constructor responses', async () => {
++	const { dir, path } = writeScriptFile(['env-one', 'env-two'])
++	try {
++		process.env.LLM_MOCK_SCRIPT = path
++		const provider = new MockLlmProvider()
++		expect(await provider.chat('a')).toBe('env-one')
++		expect(await provider.chat('b')).toBe('env-two')
++	} finally {
++		rmSync(dir, { recursive: true, force: true })
++	}
++})
++
++test('mock throws when neither constructor responses nor LLM_MOCK_SCRIPT set', () => {
++	expect(() => new MockLlmProvider()).toThrow()
++})
++
++// --- OllamaProvider ---
++
++test('ollama POSTs exact chat body with system message', async () => {
++	const calls = stubFetch({ message: { content: 'hello' } })
++	const provider = new OllamaProvider({
++		baseUrl: 'http://localhost:11434',
++		model: 'llama3',
++	})
++	const result = await provider.chat('hi there', { system: 'be terse' })
++
++	expect(result).toBe('hello')
++	expect(calls).toHaveLength(1)
++	expect(calls[0]?.url).toBe('http://localhost:11434/api/chat')
++	expect(calls[0]?.init.method).toBe('POST')
++	expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
++		model: 'llama3',
++		messages: [
++			{ role: 'system', content: 'be terse' },
++			{ role: 'user', content: 'hi there' },
++		],
++		stream: false,
++	})
++})
++
++test('ollama omits system message when opts.system not provided', async () => {
++	const calls = stubFetch({ message: { content: 'ok' } })
++	const provider = new OllamaProvider({
++		baseUrl: 'http://localhost:11434',
++		model: 'llama3',
++	})
++	await provider.chat('hi')
++
++	expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
++		model: 'llama3',
++		messages: [{ role: 'user', content: 'hi' }],
++		stream: false,
++	})
++})
++
++test('ollama sends Bearer header when API key set', async () => {
++	const calls = stubFetch({ message: { content: 'ok' } })
++	const provider = new OllamaProvider({
++		baseUrl: 'http://localhost:11434',
++		model: 'llama3',
++		apiKey: 'secret-key',
++	})
++	await provider.chat('hi')
++
++	expect(new Headers(calls[0]?.init.headers).get('authorization')).toBe(
++		'Bearer secret-key',
++	)
++})
++
++test('ollama sends no Authorization header when API key unset', async () => {
++	const calls = stubFetch({ message: { content: 'ok' } })
++	const provider = new OllamaProvider({
++		baseUrl: 'http://localhost:11434',
++		model: 'llama3',
++	})
++	await provider.chat('hi')
++
++	expect(new Headers(calls[0]?.init.headers).get('authorization')).toBeNull()
++})
++
++test('ollama passes temperature through options when provided', async () => {
++	const calls = stubFetch({ message: { content: 'ok' } })
++	const provider = new OllamaProvider({
++		baseUrl: 'http://localhost:11434',
++		model: 'llama3',
++	})
++	await provider.chat('hi', { temperature: 0.7 })
++
++	expect(JSON.parse(String(calls[0]?.init.body))).toMatchObject({
++		options: { temperature: 0.7 },
++	})
++})
++
++test('ollama strips markdown code fences from response', async () => {
++	stubFetch({ message: { content: '```js\ns("bd sd")\n```' } })
++	const provider = new OllamaProvider({
++		baseUrl: 'http://localhost:11434',
++		model: 'llama3',
++	})
++	expect(await provider.chat('hi')).toBe('s("bd sd")')
++})
++
++test('ollama leaves unfenced content untouched', async () => {
++	stubFetch({ message: { content: 's("bd sd")' } })
++	const provider = new OllamaProvider({
++		baseUrl: 'http://localhost:11434',
++		model: 'llama3',
++	})
++	expect(await provider.chat('hi')).toBe('s("bd sd")')
++})
++
++// --- Factory ---
++
++test('factory defaults to OllamaProvider', () => {
++	process.env.OLLAMA_MODEL = 'llama3'
++	expect(getLlmProvider()).toBeInstanceOf(OllamaProvider)
++})
++
++test('factory picks MockLlmProvider when LLM_PROVIDER=mock', () => {
++	process.env.LLM_PROVIDER = 'mock'
++	const { dir, path } = writeScriptFile(['x'])
++	try {
++		process.env.LLM_MOCK_SCRIPT = path
++		expect(getLlmProvider()).toBeInstanceOf(MockLlmProvider)
++	} finally {
++		rmSync(dir, { recursive: true, force: true })
++	}
++})
++
++test('factory throws for unknown LLM_PROVIDER', () => {
++	process.env.LLM_PROVIDER = 'bogus'
++	expect(() => getLlmProvider()).toThrow()
++})
+diff --git a/backend/llm/provider.ts b/backend/llm/provider.ts
+new file mode 100644
+index 0000000..5be7dcb
+--- /dev/null
++++ b/backend/llm/provider.ts
+@@ -0,0 +1,134 @@
++import { readFileSync } from 'node:fs'
++
++export type LlmChatOptions = { system?: string; temperature?: number }
++
++export interface LlmProvider {
++	chat(prompt: string, opts?: LlmChatOptions): Promise<string>
++}
++
++export type OllamaConfig = {
++	baseUrl: string
++	model: string
++	apiKey?: string
++}
++
++// Ollama returns the assistant reply as { message: { content } }. LLMs often
++// wrap the requested Strudel code in a single markdown fence despite the prompt
++// forbidding it; downstream consumers (MusicEngine) need clean text.
++function stripCodeFences(content: string): string {
++	const multiline = /^```[^\n]*\n([\s\S]*?)\n```\s*$/.exec(content)
++	if (multiline) return multiline[1].trim()
++	const inline = /^```([^`]*?)```\s*$/.exec(content)
++	if (inline) return inline[1].trim()
++	return content
++}
++
++export class OllamaProvider implements LlmProvider {
++	private readonly baseUrl: string
++	private readonly model: string
++	private readonly apiKey: string | undefined
++
++	constructor({ baseUrl, model, apiKey }: OllamaConfig) {
++		this.baseUrl = baseUrl.replace(/\/$/, '')
++		this.model = model
++		this.apiKey = apiKey
++	}
++
++	async chat(prompt: string, opts?: LlmChatOptions): Promise<string> {
++		const messages: { role: 'system' | 'user'; content: string }[] = []
++		if (opts?.system) messages.push({ role: 'system', content: opts.system })
++		messages.push({ role: 'user', content: prompt })
++
++		const body: Record<string, unknown> = {
++			model: this.model,
++			messages,
++			stream: false,
++		}
++		if (opts?.temperature !== undefined) {
++			body.options = { temperature: opts.temperature }
++		}
++
++		const headers: Record<string, string> = {
++			'content-type': 'application/json',
++		}
++		if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`
++
++		const response = await fetch(`${this.baseUrl}/api/chat`, {
++			method: 'POST',
++			headers,
++			body: JSON.stringify(body),
++		})
++		if (!response.ok) {
++			throw new Error(`Ollama chat failed: ${response.status}`)
++		}
++
++		const data = (await response.json()) as {
++			message?: { content?: unknown }
++		}
++		const content = data.message?.content
++		if (typeof content !== 'string') {
++			throw new Error('Ollama chat response missing message.content')
++		}
++		return stripCodeFences(content)
++	}
++}
++
++function readScriptFile(path: string): string[] {
++	const parsed = JSON.parse(readFileSync(path, 'utf8')) as {
++		responses?: unknown
++	}
++	const responses = parsed.responses
++	if (
++		!Array.isArray(responses) ||
++		!responses.every((item) => typeof item === 'string')
++	) {
++		throw new Error(
++			`LLM_MOCK_SCRIPT must contain { responses: string[] }: ${path}`,
++		)
++	}
++	return responses
++}
++
++// Scripted provider for tests. Resolution order: explicit constructor array,
++// then the LLM_MOCK_SCRIPT fixture file, then throw. Pops in order and throws
++// once exhausted so tests never fall back to a real model.
++export class MockLlmProvider implements LlmProvider {
++	private readonly responses: string[]
++
++	constructor(responses?: string[]) {
++		if (responses !== undefined) {
++			this.responses = [...responses]
++			return
++		}
++		const scriptPath = process.env.LLM_MOCK_SCRIPT
++		if (!scriptPath) {
++			throw new Error('MockLlmProvider: pass responses or set LLM_MOCK_SCRIPT')
++		}
++		this.responses = readScriptFile(scriptPath)
++	}
++
++	async chat(_prompt: string, _opts?: LlmChatOptions): Promise<string> {
++		const next = this.responses.shift()
++		if (next === undefined) {
++			throw new Error('MockLlmProvider: scripted responses exhausted')
++		}
++		return next
++	}
++}
++
++export function getLlmProvider(): LlmProvider {
++	const kind = process.env.LLM_PROVIDER ?? 'ollama'
++	if (kind === 'mock') return new MockLlmProvider()
++	if (kind === 'ollama') {
++		const model = process.env.OLLAMA_MODEL
++		if (!model) {
++			throw new Error('OLLAMA_MODEL is required for LLM_PROVIDER=ollama')
++		}
++		return new OllamaProvider({
++			baseUrl: process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434',
++			model,
++			apiKey: process.env.OLLAMA_API_KEY || undefined,
++		})
++	}
++	throw new Error(`Unknown LLM_PROVIDER: ${kind}`)
++}

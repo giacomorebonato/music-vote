@@ -1,0 +1,595 @@
+# Review package: 9404d55..abea287
+
+## Commits
+abea287 docs: correct restart + mock-LLM claims, finish branding sweep
+0d7a5db fix(boot): wire scheduler restore, harden empty-string env values
+
+## Files changed
+ .env.example                                       |  3 +-
+ AGENTS.md                                          |  2 +-
+ README.md                                          | 14 +++---
+ backend/__tests__/boot.test.ts                     | 51 ++++++++++++++++++++++
+ backend/boot.ts                                    | 30 +++++++++++++
+ backend/llm/__tests__/provider.test.ts             | 14 +++++-
+ backend/llm/provider.ts                            |  6 ++-
+ backend/server.ts                                  |  5 +++
+ backend/ssr/__tests__/request-from-browser.test.ts | 39 +++++++++++++++++
+ backend/ssr/request-from-browser.ts                |  6 ++-
+ docs/agents/commands.md                            |  2 +-
+ docs/agents/deployment.md                          |  1 +
+ docs/agents/music-vote.md                          | 13 +++---
+ e2e/global-setup.ts                                | 15 +++----
+ e2e/music-vote.spec.ts                             |  2 +-
+ playwright.config.ts                               |  4 +-
+ playwright.ssr.config.ts                           |  2 +-
+ scripts/e2e-reset-db.sh                            | 19 ++++++++
+ 18 files changed, 197 insertions(+), 31 deletions(-)
+
+## Diff
+diff --git a/.env.example b/.env.example
+index db81d99..4265cf6 100644
+--- a/.env.example
++++ b/.env.example
+@@ -1,20 +1,19 @@
+ DATABASE_URL=file:./dev.db
+ BETTER_AUTH_SECRET=replace-with-openssl-rand-base64-32
+ BETTER_AUTH_URL=http://localhost:3000
+ PORT=3000
+ 
+ # Bot prerender (optional; prod-only). Renders bot requests via the Lightpanda
+ # binary shipped by `@lightpanda/browser`'s postinstall. Leave both commented
+ # out to use the defaults (`SSR_CACHE_DIR` → a fresh mkdtemp dir,
+-# `LIGHTPANDA_EXECUTABLE_PATH` → `~/.cache/lightpanda-node/lightpanda`); an
+-# empty assignment is not the same as being unset for the binary path.
++# `LIGHTPANDA_EXECUTABLE_PATH` → `~/.cache/lightpanda-node/lightpanda`).
+ # SSR_CACHE_DIR=
+ # LIGHTPANDA_EXECUTABLE_PATH=
+ 
+ # LLM provider: `ollama` (default) or `mock` (scripted responses for tests)
+ LLM_PROVIDER=ollama
+ 
+ # Path to a `{ "responses": string[] }` fixture, read when LLM_PROVIDER=mock.
+ # Each provider instance re-reads it from index 0, so responses are deterministic.
+ LLM_MOCK_SCRIPT=
+ 
+diff --git a/AGENTS.md b/AGENTS.md
+index 2ce24e7..c1e4ed9 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -1,13 +1,13 @@
+ # AGENTS.md
+ 
+-Bun fullstack starter: React 19 SPA (TanStack Router/Query/Form, tRPC, daisyUI v5 + Tailwind v4) on a `Bun.serve` fullstack server with tRPC v11 + better-auth over Prisma/SQLite.
++music-vote: crowd-voted AI live music on Bun — React 19 SPA (TanStack Router/Query/Form, tRPC, daisyUI v5 + Tailwind v4) on a `Bun.serve` fullstack server with tRPC v11 + better-auth over Prisma/SQLite, plus Strudel audio in the host browser. Public and AGPL-3.0 (`LICENSE`).
+ 
+ **Bun everywhere** — runtime, package manager, bundler, test runner. Never npm/pnpm/yarn.
+ 
+ - `bun run bootstrap` — fresh-clone setup (idempotent)
+ - `bun run dev` — dev server with HMR
+ - `bun run build` — production bundle (React Compiler on)
+ - `bun run check` — run before claiming work done; `bun run check:full` adds E2E for UI/auth/route changes
+ - `bun run premerge` — `check`, then fast-forward → main and push
+ 
+ Aliases `@backend/* @frontend/* @shared/*`; unit tests co-located in `__tests__/`; placement rules in `.agents/skills/project-structure/SKILL.md`.
+diff --git a/README.md b/README.md
+index e79b5c6..709a247 100644
+--- a/README.md
++++ b/README.md
+@@ -23,25 +23,29 @@ Requires Bun 1.4.2+ (see `.bun-version`).
+ 
+ Real generation needs an Ollama endpoint, but the whole loop is runnable
+ offline with scripted responses:
+ 
+ ```sh
+ # in .env
+ LLM_PROVIDER=mock
+ LLM_MOCK_SCRIPT=e2e/fixtures/llm-script.json
+ ```
+ 
+-Then sign up, create a room, and start it. Every LLM call pops the next canned
+-response from that file, so the flow is deterministic and safe for demos and
+-tests. For real musicality, set `LLM_PROVIDER=ollama` and point
+-`OLLAMA_BASE_URL` at a local Ollama or at `https://ollama.com` with
+-`OLLAMA_API_KEY`.
++Then sign up, create a room, and start it. Each LLM operation builds a fresh
++provider that re-reads that file from index 0 and pops responses in order, so
++the flow is deterministic and safe for demos and tests (a room start consumes
++`responses[0]` and `responses[1]`; later calls start over at `responses[0]`).
++
++For real musicality set `LLM_PROVIDER=ollama`, `OLLAMA_MODEL=<tag>` and point
++`OLLAMA_BASE_URL` at a local Ollama (`http://localhost:11434`) or at
++`https://ollama.com` with `OLLAMA_API_KEY` — `OLLAMA_MODEL` is required on that
++path.
+ 
+ ## Docs
+ 
+ - **Spec:** [`docs/superpowers/specs/2026-10-01-music-vote-design.md`](docs/superpowers/specs/2026-10-01-music-vote-design.md) — product design, room lifecycle, failure table.
+ - **Plan:** [`docs/superpowers/plans/2026-10-01-music-vote.md`](docs/superpowers/plans/2026-10-01-music-vote.md) — the task-by-task build.
+ - **Env, deploy, ops:** [`docs/agents/music-vote.md`](docs/agents/music-vote.md) — env vars, `fly deploy`, single-machine/SQLite constraints, known limitations.
+ - **Agent context:** [`AGENTS.md`](AGENTS.md) — stack, scripts, conventions; [`docs/agents/`](docs/agents/) covers commands, deployment, Prisma, bot SSR, and React Compiler in depth.
+ - **Placement rules:** [`.agents/skills/project-structure/SKILL.md`](.agents/skills/project-structure/SKILL.md).
+ 
+ ## Verification
+diff --git a/backend/__tests__/boot.test.ts b/backend/__tests__/boot.test.ts
+new file mode 100644
+index 0000000..4d02dd8
+--- /dev/null
++++ b/backend/__tests__/boot.test.ts
+@@ -0,0 +1,51 @@
++import { expect, spyOn, test } from 'bun:test'
++import { readFileSync } from 'node:fs'
++
++import { bootSchedulers } from '@backend/boot'
++
++test('bootSchedulers awaits the injected restore exactly once', async () => {
++	let calls = 0
++	await bootSchedulers(async () => {
++		calls += 1
++	})
++	expect(calls).toBe(1)
++})
++
++test('a failing restore is logged, not thrown (server still boots)', async () => {
++	const logged = spyOn(console, 'error').mockImplementation(() => {})
++	const failure = new Error('db unavailable')
++
++	try {
++		await expect(
++			bootSchedulers(async () => {
++				throw failure
++			}),
++		).resolves.toBeUndefined()
++		expect(logged).toHaveBeenCalledTimes(1)
++		expect(logged.mock.calls[0]?.[1]).toBe(failure)
++	} finally {
++		logged.mockRestore()
++	}
++})
++
++/**
++ * Wiring guard — not a behavior test.
++ *
++ * `restoreSchedulers` existed, was unit-tested, and was never called from the
++ * production entrypoint, so the spec's failure-table promise ("server restart
++ * rebuilds timers from DB", docs/agents/music-vote.md) was silently broken:
++ * after a mid-set restart, live rooms were orphaned. A unit test on
++ * `bootSchedulers` cannot catch that — it passes whether or not anything calls
++ * the seam. This asserts the file `bun run dev` / `bun run start` actually
++ * execute (`backend/server.ts`) imports and awaits it.
++ */
++test('server.ts wires the boot restore seam (wiring guard)', () => {
++	const source = readFileSync(new URL('../server.ts', import.meta.url), 'utf8')
++	const withoutImports = source
++		.split('\n')
++		.filter((line) => !line.trimStart().startsWith('import'))
++		.join('\n')
++
++	expect(source).toMatch(/from '@backend\/boot'/)
++	expect(withoutImports).toMatch(/await bootSchedulers\(\)/)
++})
+diff --git a/backend/boot.ts b/backend/boot.ts
+new file mode 100644
+index 0000000..18917db
+--- /dev/null
++++ b/backend/boot.ts
+@@ -0,0 +1,30 @@
++import { restoreSchedulers } from '@backend/polls/scheduler'
++
++/**
++ * Boot-time scheduler restore.
++ *
++ * `restoreSchedulers` rebuilds poll and outro timers from the DB for rooms that
++ * were mid-set when the process stopped. Without it a restart mid-set orphans
++ * every live room: no poll opens or closes, no end timer fires, and votes land
++ * in the DB without any effect — the spec's failure table ("server restart →
++ * PollScheduler rebuilds timers from DB") would be a promise the shipped server
++ * never keeps.
++ *
++ * The restore function is injected so the failure path is testable. A restore
++ * failure is logged, never thrown: the HTTP server is already listening, and
++ * crashing would take the whole venue down instead of leaving a usable app
++ * whose timers were not restored.
++ */
++export async function bootSchedulers(
++	restore: () => Promise<void> = restoreSchedulers,
++): Promise<void> {
++	try {
++		await restore()
++	} catch (error) {
++		// biome-ignore lint/suspicious/noConsole: boot-time restore faults must reach the deploy logs
++		console.error(
++			'boot: scheduler restore failed; continuing without restored timers',
++			error,
++		)
++	}
++}
+diff --git a/backend/llm/__tests__/provider.test.ts b/backend/llm/__tests__/provider.test.ts
+index 1bab57f..53ff2aa 100644
+--- a/backend/llm/__tests__/provider.test.ts
++++ b/backend/llm/__tests__/provider.test.ts
+@@ -200,12 +200,24 @@ test('factory picks MockLlmProvider when LLM_PROVIDER=mock', () => {
+ 	try {
+ 		process.env.LLM_MOCK_SCRIPT = path
+ 		expect(getLlmProvider()).toBeInstanceOf(MockLlmProvider)
+ 	} finally {
+ 		rmSync(dir, { recursive: true, force: true })
+ 	}
+ })
+ 
+ test('factory throws for unknown LLM_PROVIDER', () => {
+ 	process.env.LLM_PROVIDER = 'bogus'
+-	expect(() => getLlmProvider()).toThrow()
++	expect(() => getLlmProvider()).toThrow('Unknown LLM_PROVIDER: bogus')
++})
++
++test('factory treats an empty LLM_PROVIDER as unset', () => {
++	process.env.OLLAMA_MODEL = 'llama3'
++	process.env.LLM_PROVIDER = ''
++	expect(getLlmProvider()).toBeInstanceOf(OllamaProvider)
++})
++
++test('factory treats a whitespace-only LLM_PROVIDER as unset', () => {
++	process.env.OLLAMA_MODEL = 'llama3'
++	process.env.LLM_PROVIDER = '   '
++	expect(getLlmProvider()).toBeInstanceOf(OllamaProvider)
+ })
+diff --git a/backend/llm/provider.ts b/backend/llm/provider.ts
+index 5be7dcb..b28be86 100644
+--- a/backend/llm/provider.ts
++++ b/backend/llm/provider.ts
+@@ -110,21 +110,25 @@ export class MockLlmProvider implements LlmProvider {
+ 	async chat(_prompt: string, _opts?: LlmChatOptions): Promise<string> {
+ 		const next = this.responses.shift()
+ 		if (next === undefined) {
+ 			throw new Error('MockLlmProvider: scripted responses exhausted')
+ 		}
+ 		return next
+ 	}
+ }
+ 
+ export function getLlmProvider(): LlmProvider {
+-	const kind = process.env.LLM_PROVIDER ?? 'ollama'
++	// An empty or whitespace-only value is treated as unset: a deploy that sets
++	// `LLM_PROVIDER=` must fall back to the default rather than throw
++	// `Unknown LLM_PROVIDER: ` at the first room start. A non-empty unknown
++	// value still throws.
++	const kind = process.env.LLM_PROVIDER?.trim() || 'ollama'
+ 	if (kind === 'mock') return new MockLlmProvider()
+ 	if (kind === 'ollama') {
+ 		const model = process.env.OLLAMA_MODEL
+ 		if (!model) {
+ 			throw new Error('OLLAMA_MODEL is required for LLM_PROVIDER=ollama')
+ 		}
+ 		return new OllamaProvider({
+ 			baseUrl: process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434',
+ 			model,
+ 			apiKey: process.env.OLLAMA_API_KEY || undefined,
+diff --git a/backend/server.ts b/backend/server.ts
+index e95a6cb..a52e876 100644
+--- a/backend/server.ts
++++ b/backend/server.ts
+@@ -1,11 +1,12 @@
+ import { auth } from '@backend/auth/auth'
++import { bootSchedulers } from '@backend/boot'
+ import { prisma } from '@backend/db/client'
+ import {
+ 	normalizeTrpcRequest,
+ 	TRPC_ENDPOINT,
+ } from '@backend/normalize-trpc-request'
+ import {
+ 	createProdRoleResolver,
+ 	createWsUpgradeHandler,
+ 	hub,
+ 	type RoleResolver,
+@@ -130,10 +131,14 @@ const httpServer = Bun.serve<SocketData>({
+ 		close(ws) {
+ 			hub.onClose(ws)
+ 		},
+ 		message() {
+ 			// client -> server protocol is not used yet
+ 		},
+ 	},
+ })
+ 
+ console.log(`music-vote on http://localhost:${httpServer.port}`)
++
++// Re-arm timers for rooms that were mid-set when the process stopped. Failures
++// are logged and non-fatal (see backend/boot.ts).
++await bootSchedulers()
+diff --git a/backend/ssr/__tests__/request-from-browser.test.ts b/backend/ssr/__tests__/request-from-browser.test.ts
+new file mode 100644
+index 0000000..687d880
+--- /dev/null
++++ b/backend/ssr/__tests__/request-from-browser.test.ts
+@@ -0,0 +1,39 @@
++import { afterEach, beforeEach, expect, test } from 'bun:test'
++import { homedir } from 'node:os'
++import { resolve as resolvePath } from 'node:path'
++
++import { lightpandaBinary } from '@backend/ssr/request-from-browser'
++
++const DEFAULT_BINARY = resolvePath(
++	`${homedir()}/.cache/lightpanda-node/lightpanda`,
++)
++
++const original = process.env.LIGHTPANDA_EXECUTABLE_PATH
++
++beforeEach(() => {
++	delete process.env.LIGHTPANDA_EXECUTABLE_PATH
++})
++
++afterEach(() => {
++	if (original === undefined) delete process.env.LIGHTPANDA_EXECUTABLE_PATH
++	else process.env.LIGHTPANDA_EXECUTABLE_PATH = original
++})
++
++test('defaults to the postinstall-cached browser binary when unset', () => {
++	expect(lightpandaBinary()).toBe(DEFAULT_BINARY)
++})
++
++test('an empty LIGHTPANDA_EXECUTABLE_PATH falls back to the default', () => {
++	process.env.LIGHTPANDA_EXECUTABLE_PATH = ''
++	expect(lightpandaBinary()).toBe(DEFAULT_BINARY)
++})
++
++test('a whitespace-only LIGHTPANDA_EXECUTABLE_PATH falls back to the default', () => {
++	process.env.LIGHTPANDA_EXECUTABLE_PATH = '   '
++	expect(lightpandaBinary()).toBe(DEFAULT_BINARY)
++})
++
++test('an explicit LIGHTPANDA_EXECUTABLE_PATH wins', () => {
++	process.env.LIGHTPANDA_EXECUTABLE_PATH = '/opt/lightpanda/lightpanda'
++	expect(lightpandaBinary()).toBe('/opt/lightpanda/lightpanda')
++})
+diff --git a/backend/ssr/request-from-browser.ts b/backend/ssr/request-from-browser.ts
+index ffe286b..46cb493 100644
+--- a/backend/ssr/request-from-browser.ts
++++ b/backend/ssr/request-from-browser.ts
+@@ -4,23 +4,25 @@ import { resolve as resolvePath } from 'node:path'
+ import { fileURLToPath } from 'node:url'
+ import {
+ 	isMainThread,
+ 	parentPort,
+ 	Worker,
+ 	workerData,
+ } from 'node:worker_threads'
+ 
+ // Resolve the lightpanda binary the same way @lightpanda/browser does:
+ // LIGHTPANDA_EXECUTABLE_PATH wins, else ~/.cache/lightpanda-node/lightpanda.
+-function lightpandaBinary(): string {
++// An empty or whitespace-only value is treated as unset — otherwise
++// execFileSync('') throws and prerender silently serves the raw SPA shell.
++export function lightpandaBinary(): string {
+ 	return (
+-		process.env.LIGHTPANDA_EXECUTABLE_PATH ??
++		process.env.LIGHTPANDA_EXECUTABLE_PATH?.trim() ||
+ 		resolvePath(`${homedir()}/.cache/lightpanda-node/lightpanda`)
+ 	)
+ }
+ 
+ export async function requestFromBrowser(url: string): Promise<string> {
+ 	return new Promise<string>((resolve, reject) => {
+ 		const worker = new Worker(fileURLToPath(import.meta.url), {
+ 			workerData: { url },
+ 		})
+ 		worker.on('message', (m) => {
+diff --git a/docs/agents/commands.md b/docs/agents/commands.md
+index 6df4394..0c2ed65 100644
+--- a/docs/agents/commands.md
++++ b/docs/agents/commands.md
+@@ -37,11 +37,11 @@
+ `.githooks/pre-commit` runs Biome check + typecheck. `.githooks/pre-push` runs the full `scripts/check.sh` gate. `bun run bootstrap` sets `core.hooksPath = .githooks`. Bypass with `--no-verify` only when intentionally breaking the gate.
+ 
+ ## Knip
+ 
+ Knip runs in CI and inside `bun run check`; it **fails** on unused dependencies, files, or exports. Run it after any file add/move.
+ 
+ ## Skills / MCP
+ 
+ `apm.yml` is the canonical list of skills + MCP servers (frontend-design, TanStack, daisyUI skills; Playwright, GitHub, Prisma, Context7 MCP). `bun run bootstrap` (or `apm install`) installs them.
+ 
+-`.mcp.json` is a minimal hand-maintained fallback (Context7 only) for agents that read `.mcp.json` directly and do not understand APM; it is intentionally **not** kept in lockstep with `apm.yml` because some APM-managed servers need tokens/secrets not appropriate to ship in a starter. Do not hand-add token-gated servers to `.mcp.json`.
+\ No newline at end of file
++`.mcp.json` is a minimal hand-maintained fallback (Context7 only) for agents that read `.mcp.json` directly and do not understand APM; it is intentionally **not** kept in lockstep with `apm.yml` because some APM-managed servers need tokens/secrets that should not be committed to the repository. Do not hand-add token-gated servers to `.mcp.json`.
+\ No newline at end of file
+diff --git a/docs/agents/deployment.md b/docs/agents/deployment.md
+index 9736ad3..9e0179d 100644
+--- a/docs/agents/deployment.md
++++ b/docs/agents/deployment.md
+@@ -12,11 +12,12 @@ Target: app `music-vote` on Fly.io. Infra files live in repo: `Dockerfile` (mult
+   flyctl auth login
+   flyctl apps create music-vote
+   flyctl volumes create music_vote_data --size 1   # pick region or omit for nearest
+   flyctl secrets set BETTER_AUTH_SECRET=$(openssl rand -base64 32) \
+     BETTER_AUTH_URL=https://music-vote.fly.dev NODE_ENV=production
+   flyctl deploy
+   ```
+ - **Redeploy** (update code, keep data): `flyctl deploy`.
+ - **Replace an existing app** (fresh state, wipes data): `flyctl apps destroy music-vote` then run the first-deploy steps. The volume must be recreated.
+ - **Open**: `flyctl apps open` → `https://music-vote.fly.dev`.
++- **Rename**: this repo's app and volume were renamed from the starter's `mino-starter` / `mino_starter_data` to `music-vote` / `music_vote_data`, and nothing migrates data for you — an existing starter deployment's volume is not carried over, so a fresh `fly apps create` here starts from an empty volume.
+ - **Caveats**: single-machine only (SQLite volume). `better-auth` sessions rely on `BETTER_AUTH_SECRET` — rotating it logs out all users. Devtools are dev-only and excluded from the prod bundle via the `scripts/build.ts` stub plugin.
+\ No newline at end of file
+diff --git a/docs/agents/music-vote.md b/docs/agents/music-vote.md
+index 7376517..b84e901 100644
+--- a/docs/agents/music-vote.md
++++ b/docs/agents/music-vote.md
+@@ -21,23 +21,23 @@ login. LLM calls happen server-side only — API keys never reach a browser.
+ | Var | Required | Default | Notes |
+ |---|---|---|---|
+ | `DATABASE_URL` | prod | `file:./dev.db` | Prod is baked into the Dockerfile (`file:/data/prod.db`), not a secret. |
+ | `BETTER_AUTH_SECRET` | yes | — | `openssl rand -base64 32`. Rotating it logs out every user. |
+ | `BETTER_AUTH_URL` | yes | — | `http://localhost:3000` dev / `https://music-vote.fly.dev` prod. |
+ | `PORT` | no | `3000` | Must match `fly.toml` `internal_port`. |
+ | `LLM_PROVIDER` | no | `ollama` | `ollama` or `mock`. Anything else throws at first LLM call. |
+ | `OLLAMA_BASE_URL` | no | `http://localhost:11434` | Local Ollama in dev; `https://ollama.com` for cloud in prod. |
+ | `OLLAMA_MODEL` | yes (ollama) | — | Model tag, e.g. `llama3.1`. Missing → `OLLAMA_MODEL is required`. |
+ | `OLLAMA_API_KEY` | no | — | Sent as `Authorization: Bearer <key>`. Ollama cloud key → Fly secret. |
+-| `LLM_MOCK_SCRIPT` | yes (mock) | — | Path to `{ "responses": string[] }`; responses are popped in order and the provider throws when exhausted, so tests never hit a real model. |
++| `LLM_MOCK_SCRIPT` | yes (mock) | — | Path to `{ "responses": string[] }`. Each `getLlmProvider()` call builds a fresh provider that re-reads the file from index 0 and pops responses in order (one instance throws when exhausted), so tests never hit a real model. |
+ | `SSR_CACHE_DIR` | no | `mkdtemp` dir | Bot-prerender HTML cache — see [bot-ssr.md](bot-ssr.md). |
+-| `LIGHTPANDA_EXECUTABLE_PATH` | no | `~/.cache/lightpanda-node/lightpanda` | Prod sets it in the Dockerfile. Leave it unset rather than empty — an empty assignment is passed through as an empty path and silently disables bot prerender. |
++| `LIGHTPANDA_EXECUTABLE_PATH` | no | `~/.cache/lightpanda-node/lightpanda` | Prod sets it in the Dockerfile. Unset or empty falls back to the default. |
+ | `MV_E2E_FAST` | test-only | — | `1` shrinks the poll open window to 5s and clamps the interval minimum to 10s (`backend/polls/scheduler.ts`). Set by `playwright.config.ts` only. |
+ 
+ ## Local run with the mock LLM
+ 
+ ```sh
+ bun run bootstrap                 # deps + skills/MCP + prisma generate + migrate + hooks
+ cp .env.example .env              # set BETTER_AUTH_SECRET
+ # in .env:
+ #   LLM_PROVIDER=mock
+ #   LLM_MOCK_SCRIPT=e2e/fixtures/llm-script.json
+@@ -85,23 +85,26 @@ Redeploy after code changes: `fly deploy`. Migrations run on every boot
+   idle for a whole poll interval, so do not add proxy settings that close idle
+   sockets aggressively — a dropped socket means the host's music stops until
+   the client reconnects (it retries with capped backoff and re-applies
+   `currentCode`). Verify a deploy by opening a host page and watching it hold
+   the connection across at least one poll interval.
+ - **Scale-to-zero is safe for data, not for a live set.** `auto_stop_machines`
+   with `min_machines_running = 0` sleeps the app when idle; `/data` survives
+   stop/start and wake-on-request adds a cold-start delay before the first vote
+   lands. An open room holds WebSocket connections, which keeps the machine
+   awake.
+-- **Server restart mid-set.** `PollScheduler` rebuilds timers from the DB
+-  (polls are timestamped, not tick-based): an overdue poll closes with no
+-  change, and the host browser reconnects and re-applies `currentCode`.
++- **Server restart mid-set.** `backend/server.ts` awaits `bootSchedulers()`
++  (`backend/boot.ts`) once the server is listening, which runs
++  `PollScheduler.restoreSchedulers()`: live rooms are re-armed, overdue open
++  polls close with no change, and outro rooms resume or finalize (polls are
++  timestamped, not tick-based). A restore failure is logged and non-fatal — the
++  server still starts, but rooms stay orphaned until the next restart.
+ - **LLM down / slow.** Polls keep running from the pre-generated question
+   queue; music freezes at the last-good pattern and the host page surfaces a
+   warning. The host is told, the show keeps going.
+ - **Invalid codegen** (twice) or a failed browser sandbox eval → no change is
+   applied, the last-good pattern keeps playing, the poll closes normally and
+   the failure is logged.
+ - **Deploy freshness.** `NODE_ENV=production` is set in the Dockerfile; without
+   it the SPA shell is served unbundled from the dev server path. The build must
+   produce `dist/` (`bun run build`) — `fly deploy` builds from the Dockerfile.
+ 
+diff --git a/e2e/global-setup.ts b/e2e/global-setup.ts
+index bf17cfd..afbf804 100644
+--- a/e2e/global-setup.ts
++++ b/e2e/global-setup.ts
+@@ -1,15 +1,10 @@
+-import { execSync } from 'node:child_process'
+ import { rmSync } from 'node:fs'
+ 
+ export default async function globalSetup(): Promise<void> {
++	// DB reset is deliberately NOT here: Playwright starts the webServer before
++	// globalSetup, so wiping `prisma/test.db` from this hook deletes the file out
++	// from under the already-booted server (its next query fails with
++	// SQLITE_IOERR_VNODE). It runs in the `webServer.command` instead — see
++	// scripts/e2e-reset-db.sh.
+ 	rmSync('/tmp/mino-ssr-cache-e2e', { recursive: true, force: true })
+-	// Fresh test DB each run without `prisma migrate reset` (which Prisma's
+-	// AI-agent guard blocks when run under an agent). Deleting the SQLite file
+-	// + `migrate deploy` (idempotent, non-interactive, non-destructive) gives the
+-	// same clean-slate result and works in any environment.
+-	rmSync('prisma/test.db', { force: true })
+-	rmSync('prisma/test.db-journal', { force: true })
+-	execSync('DATABASE_URL=file:./test.db bunx prisma migrate deploy', {
+-		stdio: 'inherit',
+-	})
+ }
+diff --git a/e2e/music-vote.spec.ts b/e2e/music-vote.spec.ts
+index 86f01cc..fa137d5 100644
+--- a/e2e/music-vote.spec.ts
++++ b/e2e/music-vote.spec.ts
+@@ -70,21 +70,21 @@ const countAudioStarts = (): void => {
+ 	wrap(w.AudioScheduledSourceNode)
+ 	wrap(w.AudioBufferSourceNode)
+ }
+ 
+ async function audioStarts(page: Page): Promise<number> {
+ 	return page.evaluate(
+ 		() => (window as unknown as { __audioStarts?: number }).__audioStarts ?? 0,
+ 	)
+ }
+ 
+-/** Starter signup helper pattern (`e2e/auth.spec.ts`). */
++/** Signup helper pattern (`e2e/auth.spec.ts`). */
+ async function signUp(page: Page, email: string): Promise<void> {
+ 	await page.goto('/login')
+ 	await page.getByRole('button', { name: 'Sign up' }).click()
+ 	await page.getByPlaceholder('Name').fill('Host')
+ 	await page.getByPlaceholder('Email').fill(email)
+ 	await page.getByPlaceholder('Password').fill('password123')
+ 	await page.locator('form button[type=submit]').click()
+ 	await expect(page).toHaveURL(/\/$/)
+ }
+ 
+diff --git a/playwright.config.ts b/playwright.config.ts
+index 2ad2916..30653c6 100644
+--- a/playwright.config.ts
++++ b/playwright.config.ts
+@@ -2,17 +2,19 @@ import { defineConfig } from '@playwright/test'
+ 
+ export default defineConfig({
+ 	testDir: './e2e',
+ 	testIgnore: /ssr\.spec\.ts$/,
+ 	globalSetup: './e2e/global-setup.ts',
+ 	use: { baseURL: 'http://localhost:3000' },
+ 	webServer: {
+ 		// The full-cycle spec drives the real HTTP/WS surface against a scripted
+ 		// LLM: `LLM_PROVIDER=mock` + `LLM_MOCK_SCRIPT` (no network model) and
+ 		// `MV_E2E_FAST=1` shrink the poll open window to 5s (scheduler.ts).
++		// The DB reset runs first, in the same shell: it cannot live in globalSetup
++		// (which Playwright runs after the server is already up).
+ 		command:
+-			"DATABASE_URL=file:./test.db BETTER_AUTH_SECRET='ExNy8Q9ALAjH2BEc31RrQ+KNFG4K+KjprJexVc9Xw80=' BETTER_AUTH_URL=http://localhost:3000 NODE_ENV=development LLM_PROVIDER=mock LLM_MOCK_SCRIPT=e2e/fixtures/llm-script.json MV_E2E_FAST=1 bun run backend/server.ts",
++			"bash scripts/e2e-reset-db.sh && DATABASE_URL=file:./test.db BETTER_AUTH_SECRET='ExNy8Q9ALAjH2BEc31RrQ+KNFG4K+KjprJexVc9Xw80=' BETTER_AUTH_URL=http://localhost:3000 NODE_ENV=development LLM_PROVIDER=mock LLM_MOCK_SCRIPT=e2e/fixtures/llm-script.json MV_E2E_FAST=1 bun run backend/server.ts",
+ 		url: 'http://localhost:3000',
+ 		reuseExistingServer: !process.env.CI,
+ 		timeout: 30000,
+ 	},
+ })
+diff --git a/playwright.ssr.config.ts b/playwright.ssr.config.ts
+index 0784cc0..c599203 100644
+--- a/playwright.ssr.config.ts
++++ b/playwright.ssr.config.ts
+@@ -1,15 +1,15 @@
+ import { defineConfig } from '@playwright/test'
+ 
+ export default defineConfig({
+ 	testDir: './e2e',
+ 	testMatch: 'ssr.spec.ts',
+ 	globalSetup: './e2e/global-setup.ts',
+ 	use: { baseURL: 'http://localhost:3000' },
+ 	webServer: {
+ 		command:
+-			"bun run build && DATABASE_URL=file:./test.db BETTER_AUTH_SECRET='ExNy8Q9ALAjH2BEc31RrQ+KNFG4K+KjprJexVc9Xw80=' BETTER_AUTH_URL=http://localhost:3000 NODE_ENV=production SSR_CACHE_DIR=/tmp/mino-ssr-cache-e2e bun run start",
++			"bash scripts/e2e-reset-db.sh && bun run build && DATABASE_URL=file:./test.db BETTER_AUTH_SECRET='ExNy8Q9ALAjH2BEc31RrQ+KNFG4K+KjprJexVc9Xw80=' BETTER_AUTH_URL=http://localhost:3000 NODE_ENV=production SSR_CACHE_DIR=/tmp/mino-ssr-cache-e2e bun run start",
+ 		url: 'http://localhost:3000',
+ 		reuseExistingServer: !process.env.CI,
+ 		timeout: 60000,
+ 	},
+ })
+diff --git a/scripts/e2e-reset-db.sh b/scripts/e2e-reset-db.sh
+new file mode 100755
+index 0000000..f27683c
+--- /dev/null
++++ b/scripts/e2e-reset-db.sh
+@@ -0,0 +1,19 @@
++#!/usr/bin/env bash
++# Reset the E2E SQLite DB. Run from the Playwright `webServer.command` string,
++# BEFORE the test server starts.
++#
++# It must not live in `globalSetup`: Playwright starts the webServer first and
++# runs globalSetup afterwards (verified with DEBUG=pw:webserver), so a wipe in
++# globalSetup deletes `prisma/test.db` out from under a server that has already
++# opened it. The first query after that fails with
++# `SQLITE_IOERR_VNODE: disk I/O error` (the server opens the file at boot — e.g.
++# the scheduler restore in backend/boot.ts — not on first request).
++#
++# Fresh DB without `prisma migrate reset` (which Prisma's AI-agent guard blocks
++# when run under an agent). Deleting the SQLite file + `migrate deploy`
++# (idempotent, non-interactive, non-destructive) gives the same clean result.
++set -euo pipefail
++cd "$(dirname "$0")/.."
++
++rm -f prisma/test.db prisma/test.db-journal
++DATABASE_URL=file:./test.db bunx prisma migrate deploy

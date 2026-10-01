@@ -1,0 +1,474 @@
+# Review package: 04e4e32..6552a13
+
+## Commits
+6552a13 feat(music): state doc + llm prompt builders
+
+## Files changed
+ backend/music/__tests__/prompts.test.ts   | 117 +++++++++++++++++++++++++++
+ backend/music/__tests__/state-doc.test.ts | 111 ++++++++++++++++++++++++++
+ backend/music/prompts.ts                  | 126 ++++++++++++++++++++++++++++++
+ backend/music/state-doc.ts                |  83 ++++++++++++++++++++
+ 4 files changed, 437 insertions(+)
+
+## Diff
+diff --git a/backend/music/__tests__/prompts.test.ts b/backend/music/__tests__/prompts.test.ts
+new file mode 100644
+index 0000000..86c55f5
+--- /dev/null
++++ b/backend/music/__tests__/prompts.test.ts
+@@ -0,0 +1,117 @@
++import { expect, test } from 'bun:test'
++import {
++	buildEvolutionPrompt,
++	buildInitialPatternPrompt,
++	buildOutroPrompt,
++	buildQuestionPrompt,
++	FEW_SHOTS,
++} from '@backend/music/prompts'
++import {
++	applyChange,
++	initialStateDoc,
++	type StateDoc,
++} from '@backend/music/state-doc'
++import { compileCheck } from '@backend/music/validate'
++
++const params = { genre: 'techno', bpm: 132 }
++const currentCode = 's("bd sd cp hh")'
++const question = 'Add a punchier kick?'
++
++function votedDoc(): StateDoc {
++	return applyChange(
++		initialStateDoc(params),
++		question,
++		'yes',
++		'added a punchier kick',
++	)
++}
++
++test('FEW_SHOTS: at least 3 snippets, all valid strudel', () => {
++	expect(FEW_SHOTS.length).toBeGreaterThanOrEqual(3)
++	for (const snippet of FEW_SHOTS) {
++		expect(compileCheck(snippet).ok).toBe(true)
++	}
++})
++
++test('every prompt carries genre, bpm and few-shot snippets', () => {
++	const prompts = [
++		buildInitialPatternPrompt(params),
++		buildQuestionPrompt(votedDoc()),
++		buildEvolutionPrompt(votedDoc(), question, 'yes', currentCode),
++		buildOutroPrompt(votedDoc(), currentCode),
++	]
++
++	for (const prompt of prompts) {
++		expect(prompt).toContain('techno')
++		expect(prompt).toContain('132')
++		expect(prompt).toContain(FEW_SHOTS[0] ?? '')
++		expect(prompt).toContain(FEW_SHOTS[1] ?? '')
++	}
++})
++
++test('code prompts forbid prose and markdown fences', () => {
++	const prompts = [
++		buildInitialPatternPrompt(params),
++		buildEvolutionPrompt(votedDoc(), question, 'yes', currentCode),
++		buildOutroPrompt(votedDoc(), currentCode),
++	]
++
++	for (const prompt of prompts) {
++		expect(prompt).toContain('strudel.js code')
++		expect(prompt).toContain('no prose')
++		expect(prompt).toContain('no markdown fences')
++	}
++})
++
++test('initial pattern prompt asks for a loopable pattern at the room bpm', () => {
++	const prompt = buildInitialPatternPrompt(params)
++	expect(prompt).toContain('setcps(0.55)')
++	expect(prompt).toContain('techno')
++})
++
++test('evolution prompt carries current code, poll result, history and one-dimension rule', () => {
++	const prompt = buildEvolutionPrompt(votedDoc(), question, 'yes', currentCode)
++
++	expect(prompt).toContain(currentCode)
++	expect(prompt).toContain(question)
++	expect(prompt).toContain('yes')
++	expect(prompt).toContain('techno')
++	expect(prompt).toContain('132')
++	expect(prompt).toMatch(/exactly ONE dimension/)
++	expect(prompt).toContain('added a punchier kick')
++})
++
++test('evolution prompt renders empty history as none yet', () => {
++	const prompt = buildEvolutionPrompt(
++		initialStateDoc(params),
++		question,
++		'yes',
++		currentCode,
++	)
++	expect(prompt).toContain('Change history:\nnone yet')
++})
++
++test('outro prompt carries current code and the code-only rule', () => {
++	const prompt = buildOutroPrompt(votedDoc(), currentCode)
++
++	expect(prompt).toContain(currentCode)
++	expect(prompt).toContain('outro')
++	expect(prompt).toContain('techno')
++})
++
++test('question prompt: one yes/no question, max 120 chars, no repeats, paced', () => {
++	const doc = votedDoc()
++	const prompt = buildQuestionPrompt(doc)
++
++	expect(prompt).toContain('ONE yes/no question')
++	expect(prompt).toContain('120')
++	expect(prompt).toContain(doc.polledDimensions.join(', '))
++	expect(prompt).toContain('pace the evolution')
++	expect(prompt).toContain('techno')
++	expect(prompt).toContain('132')
++})
++
++test('question prompt renders empty polled dimensions as none yet', () => {
++	const prompt = buildQuestionPrompt(initialStateDoc(params))
++	expect(prompt).toContain('none yet')
++})
+diff --git a/backend/music/__tests__/state-doc.test.ts b/backend/music/__tests__/state-doc.test.ts
+new file mode 100644
+index 0000000..d3f3266
+--- /dev/null
++++ b/backend/music/__tests__/state-doc.test.ts
+@@ -0,0 +1,111 @@
++import { expect, test } from 'bun:test'
++import {
++	applyChange,
++	initialStateDoc,
++	type StateDoc,
++} from '@backend/music/state-doc'
++
++const params = { genre: 'techno', bpm: 132 }
++
++test('initialStateDoc: zero-history doc carries genre and bpm', () => {
++	const doc = initialStateDoc(params)
++	expect(doc.genre).toBe('techno')
++	expect(doc.bpm).toBe(132)
++	expect(doc.history).toEqual([])
++	expect(doc.polledDimensions).toEqual([])
++	expect(doc.elements).toEqual({
++		drums: false,
++		bass: false,
++		melody: false,
++		harmony: false,
++		soundDesign: [],
++	})
++})
++
++test('applyChange: appends history entry with winner and change summary', () => {
++	const next = applyChange(
++		initialStateDoc(params),
++		'Add a punchier kick?',
++		'yes',
++		'added a punchier four-on-the-floor kick',
++	)
++
++	expect(next.history).toHaveLength(1)
++	expect(next.history[0]).toMatchObject({
++		question: 'Add a punchier kick?',
++		winner: 'yes',
++		changeSummary: 'added a punchier four-on-the-floor kick',
++	})
++	expect(typeof next.history[0]?.at).toBe('number')
++})
++
++test('applyChange: records polled dimension and marks the changed element', () => {
++	const next = applyChange(
++		initialStateDoc(params),
++		'Add a punchier kick?',
++		'yes',
++		'added a punchier kick',
++	)
++
++	expect(next.polledDimensions).toEqual(['Add a punchier kick?'])
++	expect(next.elements.drums).toBe(true)
++	expect(next.elements.bass).toBe(false)
++	expect(next.elements.melody).toBe(false)
++	expect(next.elements.harmony).toBe(false)
++})
++
++test('applyChange: sound-design change lands in soundDesign list', () => {
++	const next = applyChange(
++		initialStateDoc(params),
++		'Add more space?',
++		'yes',
++		'added a shimmering reverb texture',
++	)
++
++	expect(next.elements.soundDesign).toEqual([
++		'added a shimmering reverb texture',
++	])
++	expect(next.elements.drums).toBe(false)
++})
++
++test('applyChange: accumulative over successive polls', () => {
++	let doc: StateDoc = initialStateDoc(params)
++	doc = applyChange(doc, 'Add a punchier kick?', 'yes', 'added a punchier kick')
++	doc = applyChange(doc, 'Add bass?', 'no', null)
++	doc = applyChange(doc, 'Add chords?', 'yes', 'added warm pad chords')
++
++	expect(doc.history).toHaveLength(3)
++	expect(doc.history[1]?.changeSummary).toBeNull()
++	expect(doc.polledDimensions).toEqual([
++		'Add a punchier kick?',
++		'Add bass?',
++		'Add chords?',
++	])
++	expect(doc.elements.drums).toBe(true)
++	expect(doc.elements.bass).toBe(false)
++	expect(doc.elements.harmony).toBe(true)
++})
++
++test('applyChange: null change summary leaves elements untouched', () => {
++	const doc = initialStateDoc(params)
++	const next = applyChange(doc, 'Add bass?', 'no', null)
++
++	expect(next.history[0]?.changeSummary).toBeNull()
++	expect(next.elements).toEqual(doc.elements)
++})
++
++test('applyChange is immutable', () => {
++	const doc = initialStateDoc(params)
++	const next = applyChange(doc, 'Add chords?', 'yes', 'added warm pad chords')
++
++	expect(doc.history).toEqual([])
++	expect(doc.polledDimensions).toEqual([])
++	expect(doc.elements.harmony).toBe(false)
++	expect(doc.elements.soundDesign).toEqual([])
++
++	expect(next).not.toBe(doc)
++	expect(next.elements).not.toBe(doc.elements)
++	expect(next.elements.soundDesign).not.toBe(doc.elements.soundDesign)
++	expect(next.history).not.toBe(doc.history)
++	expect(next.polledDimensions).not.toBe(doc.polledDimensions)
++})
+diff --git a/backend/music/prompts.ts b/backend/music/prompts.ts
+new file mode 100644
+index 0000000..120e26c
+--- /dev/null
++++ b/backend/music/prompts.ts
+@@ -0,0 +1,126 @@
++import type { MusicParams, StateDoc } from '@backend/music/state-doc'
++
++// Short, real Strudel snippets shown to the model as style anchors.
++export const FEW_SHOTS = [
++	's("bd sd cp hh")',
++	's("bd*2 [~ sd] cp [hh hh]").gain(0.9)',
++	'note("c2 ~ eb2 g2").s("sawtooth").lpf(600).gain(0.7)',
++	'setcps(0.5)\nn("0 3 7 10").scale("C:minor").s("triangle").delay(0.4)',
++]
++
++// The provider strips markdown fences, but only for a single, well-formed
++// fence: prose before a fence or several fences leak through. Keep the
++// prohibition explicit in every code-producing prompt.
++const CODE_ONLY_RULE =
++	'Output ONLY strudel.js code, no prose, no markdown fences.'
++
++function bpmToCps(bpm: number): number {
++	return Math.round((bpm / 240) * 1000) / 1000
++}
++
++function fewShotsBlock(): string {
++	return [
++		'FEW-SHOT STRUDEL EXAMPLES:',
++		...FEW_SHOTS.map((snippet) => `- ${snippet}`),
++	].join('\n')
++}
++
++function elementsBlock(doc: StateDoc): string {
++	const { drums, bass, melody, harmony, soundDesign } = doc.elements
++	const parts: string[] = []
++	if (drums) parts.push('drums')
++	if (bass) parts.push('bass')
++	if (melody) parts.push('melody')
++	if (harmony) parts.push('harmony')
++	if (soundDesign.length > 0) {
++		parts.push(`sound design (${soundDesign.join('; ')})`)
++	}
++	return parts.length === 0
++		? 'nothing beyond the base loop yet'
++		: parts.join(', ')
++}
++
++function historyBlock(doc: StateDoc): string {
++	if (doc.history.length === 0) return 'none yet'
++	return doc.history
++		.map(
++			(entry) =>
++				`- asked "${entry.question}" -> winner: ${entry.winner} -> ${entry.changeSummary ?? 'no change applied'}`,
++		)
++		.join('\n')
++}
++
++function polledBlock(doc: StateDoc): string {
++	return doc.polledDimensions.length === 0
++		? 'none yet'
++		: doc.polledDimensions.join(', ')
++}
++
++export function buildInitialPatternPrompt(params: MusicParams): string {
++	return [
++		`Write the opening Strudel pattern for a live ${params.genre} set at ${params.bpm} BPM.`,
++		`Start with setcps(${bpmToCps(params.bpm)}) so one cycle is one bar (4 beats) at ${params.bpm} BPM.`,
++		'Build a loopable groove: drums plus the bass, melody or harmony this genre needs. Keep it playable on its own for minutes.',
++		'',
++		fewShotsBlock(),
++		'',
++		CODE_ONLY_RULE,
++	].join('\n')
++}
++
++export function buildQuestionPrompt(doc: StateDoc): string {
++	return [
++		`You are the MC of a live ${doc.genre} set at ${doc.bpm} BPM that evolves through audience votes.`,
++		'',
++		`Elements present: ${elementsBlock(doc)}`,
++		`Change history: ${historyBlock(doc)}`,
++		`Dimensions already polled (do not repeat these): ${polledBlock(doc)}`,
++		'',
++		fewShotsBlock(),
++		'',
++		'Ask the audience about the next change.',
++		'Output ONE yes/no question, nothing else. Max 120 characters.',
++		'Never repeat a dimension already polled, never ask about code or technical terms, and pace the evolution: do not stack another melody or a third layer right after one was added.',
++	].join('\n')
++}
++
++export function buildEvolutionPrompt(
++	doc: StateDoc,
++	question: string,
++	winner: string,
++	currentCode: string,
++): string {
++	return [
++		`Update this live ${doc.genre} Strudel pattern (${doc.bpm} BPM) after an audience vote.`,
++		'',
++		'Current pattern:',
++		currentCode,
++		'',
++		`Poll question: "${question}"`,
++		`Winning vote: ${winner}`,
++		`Elements present: ${elementsBlock(doc)}`,
++		'',
++		'Change history:',
++		historyBlock(doc),
++		'',
++		fewShotsBlock(),
++		'',
++		'Change exactly ONE dimension of the pattern. The winning vote only decides whether that one change happens, never how many things change. Keep every other element exactly as it is, keep the same tempo, and keep the pattern loopable.',
++		CODE_ONLY_RULE,
++	].join('\n')
++}
++
++export function buildOutroPrompt(doc: StateDoc, currentCode: string): string {
++	return [
++		`Write the outro that ends this live ${doc.genre} set (${doc.bpm} BPM) on a resolved note.`,
++		'',
++		'Current pattern:',
++		currentCode,
++		`Elements present: ${elementsBlock(doc)}`,
++		'',
++		fewShotsBlock(),
++		'',
++		'Resolve the set: sweep or fade the filter, drop elements one at a time, and land on a sustained final hit or chord. Finish within about 8 cycles and keep the tempo.',
++		CODE_ONLY_RULE,
++	].join('\n')
++}
+diff --git a/backend/music/state-doc.ts b/backend/music/state-doc.ts
+new file mode 100644
+index 0000000..7bec847
+--- /dev/null
++++ b/backend/music/state-doc.ts
+@@ -0,0 +1,83 @@
++export type MusicParams = { genre: string; bpm: number }
++
++type StateDocElements = {
++	drums: boolean
++	bass: boolean
++	melody: boolean
++	harmony: boolean
++	soundDesign: string[]
++}
++
++type StateDocHistoryEntry = {
++	at: number
++	question: string
++	winner: string
++	changeSummary: string | null
++}
++
++export type StateDoc = {
++	genre: string
++	bpm: number
++	elements: StateDocElements
++	history: StateDocHistoryEntry[]
++	polledDimensions: string[]
++}
++
++// Zero-history doc for a freshly started room: no poll has been applied yet, so
++// every element starts absent and nothing has been polled.
++export function initialStateDoc(params: MusicParams): StateDoc {
++	return {
++		genre: params.genre,
++		bpm: params.bpm,
++		elements: {
++			drums: false,
++			bass: false,
++			melody: false,
++			harmony: false,
++			soundDesign: [],
++		},
++		history: [],
++		polledDimensions: [],
++	}
++}
++
++const SOUND_DESIGN_PATTERN = /sound|texture|fx|filter|noise|reverb|delay/
++
++// The only signal about what changed is the free-text summary the LLM reports,
++// so element presence is inferred from its wording.
++function nextElements(
++	elements: StateDocElements,
++	changeSummary: string | null,
++): StateDocElements {
++	const text = (changeSummary ?? '').toLowerCase()
++	const addsSoundDesign =
++		changeSummary !== null && SOUND_DESIGN_PATTERN.test(text)
++	return {
++		drums: elements.drums || /drum|kick|snare|hat|perc/.test(text),
++		bass: elements.bass || /bass|sub/.test(text),
++		melody: elements.melody || /melod|lead|arp|riff|hook/.test(text),
++		harmony: elements.harmony || /harmon|chord|pad|stab/.test(text),
++		soundDesign: addsSoundDesign
++			? [...elements.soundDesign, changeSummary]
++			: [...elements.soundDesign],
++	}
++}
++
++// Immutable: returns a new doc (callers persist it straight to Room.stateDoc),
++// appending the poll to history and recording the polled dimension.
++export function applyChange(
++	doc: StateDoc,
++	question: string,
++	winner: string,
++	changeSummary: string | null,
++): StateDoc {
++	return {
++		...doc,
++		elements: nextElements(doc.elements, changeSummary),
++		history: [
++			...doc.history,
++			{ at: Date.now(), question, winner, changeSummary },
++		],
++		polledDimensions: [...doc.polledDimensions, question],
++	}
++}

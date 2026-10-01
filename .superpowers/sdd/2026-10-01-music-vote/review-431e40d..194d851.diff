@@ -1,0 +1,571 @@
+# Review package: 431e40d..194d851
+
+## Commits
+194d851 fix(host): deterministic apply-status badge; tighten e2e qr + tally asserts
+
+## Files changed
+ e2e/music-vote.spec.ts                      |   9 +-
+ frontend/lib/__tests__/apply-status.test.ts |  87 +++++++++++++++++
+ frontend/lib/apply-status.ts                |  68 ++++++++++++++
+ frontend/routes/host.tsx                    | 141 ++++++++++++++++++++--------
+ 4 files changed, 265 insertions(+), 40 deletions(-)
+
+## Diff
+diff --git a/e2e/music-vote.spec.ts b/e2e/music-vote.spec.ts
+index d978cc0..86f01cc 100644
+--- a/e2e/music-vote.spec.ts
++++ b/e2e/music-vote.spec.ts
+@@ -120,20 +120,22 @@ test('host runs a set that the audience votes through, undoes, and ends', async
+ 
+ 	// --- host signs up and creates the room ------------------------------
+ 	await signUp(host, `e2e-cycle-${Date.now()}@example.com`)
+ 	await host.goto('/create')
+ 	// Schema minimums: 5 min / 60s (FAST only shrinks the poll open window).
+ 	await host.getByLabel('Length in minutes (5–60)').fill('5')
+ 	await host.getByLabel('Poll interval in seconds (60–600)').fill('60')
+ 	await host.getByTestId('create-room').click()
+ 	await expect(host).toHaveURL(/\/r\/[^/]+\/host/)
+ 	await expect(host.getByTestId('room-status')).toHaveText('lobby')
++	// Step 1 of the brief: the host page shows the scannable QR, not just the URL.
++	await expect(host.getByTestId('qr-code')).toBeVisible({ timeout: 15_000 })
+ 	const voteUrl = (await host.getByTestId('vote-url').innerText()).trim()
+ 
+ 	// Both phones open the QR target and wait in the lobby. They are already
+ 	// connected when the poll opens, which keeps every 5s voting window safe.
+ 	for (const phone of [phoneA, phoneB]) {
+ 		await phone.goto(voteUrl)
+ 		await expect(phone.getByTestId('waiting-dj')).toBeVisible()
+ 	}
+ 
+ 	// --- start: QR stays, music starts, poll 1 opens ---------------------
+@@ -191,24 +193,27 @@ test('host runs a set that the audience votes through, undoes, and ends', async
+ 	])
+ 
+ 	await phoneA.getByTestId(optionTestId).click()
+ 	// Duplicate vote renders the counted state, never an error alert.
+ 	await expect(phoneA.getByTestId('vote-counted')).toBeVisible({
+ 		timeout: POLL_OPEN_WINDOW_MS,
+ 	})
+ 	await expect(phoneA.getByTestId('vote-error')).toHaveCount(0)
+ 
+ 	// Two accepted votes, not three: the duplicate was rejected by the server.
++	// Read the count element's own text — a substring match would also accept
++	// "12"/"20".
+ 	const hostOptionRow = host.getByTestId(`poll-option-${optionKey}`)
++	const hostTally = hostOptionRow.locator('span').last()
+ 	await expect
+-		.poll(async () => hostOptionRow.innerText(), { timeout: 10_000 })
+-		.toContain('2')
++		.poll(async () => (await hostTally.innerText()).trim(), { timeout: 10_000 })
++		.toBe('2')
+ 
+ 	// --- poll 1 closes: the winning option drives the evolution ----------
+ 	await expect(host.getByTestId('apply-status')).toHaveText('change applied', {
+ 		timeout: 30_000,
+ 	})
+ 
+ 	// Audio keeps producing new voices while the set is live.
+ 	const liveStarts = await audioStarts(host)
+ 	await expect
+ 		.poll(() => audioStarts(host), { timeout: 20_000 })
+diff --git a/frontend/lib/__tests__/apply-status.test.ts b/frontend/lib/__tests__/apply-status.test.ts
+new file mode 100644
+index 0000000..dbf2e1c
+--- /dev/null
++++ b/frontend/lib/__tests__/apply-status.test.ts
+@@ -0,0 +1,87 @@
++import { expect, test } from 'bun:test'
++import {
++	type ApplyStatusState,
++	initialApplyStatusState,
++	reduceApplyStatus,
++} from '@frontend/lib/apply-status'
++
++/**
++ * The badge has two asynchronous writers (the `code_update` frame handler and
++ * the undo mutation). These tests fix the invariant the host console needs:
++ * once the host undoes a change, the badge reads `reverted` whichever writer
++ * completes first.
++ */
++
++const APPLIED = { text: 'change applied', tone: 'success' } as const
++const REVERTED = { text: 'reverted', tone: 'warning' } as const
++
++test('undo response first: a late apply result for the superseded version is ignored', () => {
++	const start: ApplyStatusState = reduceApplyStatus(initialApplyStatusState, {
++		type: 'start',
++		seq: 1,
++	})
++	// Undo is clicked while the apply above is still running in Strudel.
++	const undoStarted: ApplyStatusState = reduceApplyStatus(start, {
++		type: 'start',
++		seq: 2,
++	})
++	const undone: ApplyStatusState = reduceApplyStatus(undoStarted, {
++		type: 'reverted',
++		seq: 2,
++	})
++	expect(undone.status).toEqual(REVERTED)
++
++	// The earlier apply's `evaluate` resolves only now.
++	const late: ApplyStatusState = reduceApplyStatus(undone, {
++		type: 'applied',
++		seq: 1,
++	})
++	expect(late.status).toEqual(REVERTED)
++})
++
++test('WS apply first: the undo response still wins and stays reverted', () => {
++	let state: ApplyStatusState = reduceApplyStatus(initialApplyStatusState, {
++		type: 'start',
++		seq: 1,
++	})
++	state = reduceApplyStatus(state, { type: 'applied', seq: 1 })
++	expect(state.status).toEqual(APPLIED)
++
++	state = reduceApplyStatus(state, { type: 'start', seq: 2 })
++	state = reduceApplyStatus(state, { type: 'reverted', seq: 2 })
++	expect(state.status).toEqual(REVERTED)
++
++	// The undo's own `code_update` frame lands after the mutation response and
++	// reuses the undo's token: same outcome, so it cannot flip the badge.
++	state = reduceApplyStatus(state, { type: 'reverted', seq: 2 })
++	expect(state.status).toEqual(REVERTED)
++})
++
++test('a later apply after an undo still updates the badge', () => {
++	let state: ApplyStatusState = reduceApplyStatus(initialApplyStatusState, {
++		type: 'start',
++		seq: 1,
++	})
++	state = reduceApplyStatus(state, { type: 'reverted', seq: 1 })
++	expect(state.status).toEqual(REVERTED)
++
++	// Next poll's evolution, or the outro.
++	state = reduceApplyStatus(state, { type: 'start', seq: 2 })
++	state = reduceApplyStatus(state, { type: 'applied', seq: 2 })
++	expect(state.status).toEqual(APPLIED)
++})
++
++test('a rejected apply reports the error and outranks an older apply', () => {
++	let state: ApplyStatusState = reduceApplyStatus(initialApplyStatusState, {
++		type: 'start',
++		seq: 1,
++	})
++	state = reduceApplyStatus(state, { type: 'applied', seq: 1 })
++	state = reduceApplyStatus(state, { type: 'start', seq: 2 })
++	state = reduceApplyStatus(state, { type: 'failed', seq: 2, error: 'boom' })
++	expect(state.status).toEqual({ text: 'change rejected: boom', tone: 'error' })
++
++	// A late success from the superseded apply cannot clear the error.
++	state = reduceApplyStatus(state, { type: 'applied', seq: 1 })
++	expect(state.status).toEqual({ text: 'change rejected: boom', tone: 'error' })
++})
+diff --git a/frontend/lib/apply-status.ts b/frontend/lib/apply-status.ts
+new file mode 100644
+index 0000000..bf811c3
+--- /dev/null
++++ b/frontend/lib/apply-status.ts
+@@ -0,0 +1,68 @@
++export type ApplyStatus = {
++	text: string
++	tone: 'success' | 'error' | 'warning'
++}
++
++/**
++ * Host-console "apply status" badge state.
++ *
++ * The badge has two writers — the `code_update` frame handler and the undo
++ * mutation — and their completions are asynchronous, so which one lands last is
++ * not fixed: a Strudel `evaluate` from an earlier apply can resolve *after* the
++ * undo response, and the undo's own frame can arrive before or after it. Pure
++ * last-writer-wins would then show `change applied` for a set the host just
++ * reverted.
++ *
++ * The badge is therefore the outcome of the newest operation. Every operation
++ * claims a monotonic `seq` when it STARTS (an apply frame, or the Undo click),
++ * and a fact is applied only while no newer operation has been claimed. The
++ * claimed `seq` lives in the state, so the claim alone rejects the older
++ * operation's in-flight result — no dependence on render timing.
++ */
++export type ApplyStatusState = {
++	status: ApplyStatus | null
++	seq: number
++}
++
++export const initialApplyStatusState: ApplyStatusState = {
++	status: null,
++	seq: 0,
++}
++
++export type ApplyStatusFact =
++	/** An operation claimed `seq`. Leaves the badge alone, invalidates older writes. */
++	| { type: 'start'; seq: number }
++	/** An apply finished and the audio engine accepted the code. */
++	| { type: 'applied'; seq: number }
++	/** The host reverted the last change (undo response or the undo frame). */
++	| { type: 'reverted'; seq: number }
++	/** An apply (or the host's report of it) was rejected. */
++	| { type: 'failed'; seq: number; error: string }
++
++export function reduceApplyStatus(
++	state: ApplyStatusState,
++	fact: ApplyStatusFact,
++): ApplyStatusState {
++	if (fact.type === 'start') {
++		return { status: state.status, seq: Math.max(state.seq, fact.seq) }
++	}
++	if (fact.seq < state.seq) return state
++
++	switch (fact.type) {
++		case 'applied':
++			return {
++				status: { text: 'change applied', tone: 'success' },
++				seq: state.seq,
++			}
++		case 'reverted':
++			return {
++				status: { text: 'reverted', tone: 'warning' },
++				seq: state.seq,
++			}
++		case 'failed':
++			return {
++				status: { text: `change rejected: ${fact.error}`, tone: 'error' },
++				seq: state.seq,
++			}
++	}
++}
+diff --git a/frontend/routes/host.tsx b/frontend/routes/host.tsx
+index 30e3dfe..5fb76c2 100644
+--- a/frontend/routes/host.tsx
++++ b/frontend/routes/host.tsx
+@@ -1,31 +1,32 @@
+ import type { ApplyResult } from '@frontend/audio/strudel-init'
+ import {
+ 	StrudelPlayer,
+ 	type StrudelPlayerRef,
+ } from '@frontend/audio/strudel-player'
+ import { AppLayout } from '@frontend/components/app-layout'
+ import { PollMonitor } from '@frontend/components/poll-monitor'
+ import { QrCode } from '@frontend/components/qr-code'
++import {
++	type ApplyStatus,
++	type ApplyStatusFact,
++	initialApplyStatusState,
++	reduceApplyStatus,
++} from '@frontend/lib/apply-status'
+ import { authClient } from '@frontend/lib/auth'
+ import { useRoomChannel } from '@frontend/lib/room-ws'
+ import { useTRPC } from '@frontend/lib/trpc'
+ import type { CodeUpdateEvent, WsEvent } from '@shared/realtime/events'
+ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+ import { Link } from '@tanstack/react-router'
+ import { useCallback, useEffect, useRef, useState } from 'react'
+ 
+-type ApplyStatus = {
+-	text: string
+-	tone: 'success' | 'error' | 'warning'
+-}
+-
+ // Written as whole class literals so Tailwind/daisyUI emits them.
+ const APPLY_STATUS_CLASS: Record<ApplyStatus['tone'], string> = {
+ 	success: 'badge-success',
+ 	error: 'badge-error',
+ 	warning: 'badge-warning',
+ }
+ 
+ export function HostRoute({ roomId }: { roomId: string }) {
+ 	const { data: session, isPending } = authClient.useSession()
+ 
+@@ -57,42 +58,66 @@ function HostConsole({ roomId }: { roomId: string }) {
+ 	const trpc = useTRPC()
+ 	const queryClient = useQueryClient()
+ 
+ 	const roomQuery = useQuery(trpc.rooms.get.queryOptions({ roomId }))
+ 	const room = roomQuery.data?.room
+ 	const openPoll = roomQuery.data?.openPoll
+ 	const serverCounts = roomQuery.data?.voteCounts
+ 
+ 	const [playerCode, setPlayerCode] = useState<string | null>(null)
+ 	const [displayCode, setDisplayCode] = useState<string | null>(null)
+-	const [applyStatus, setApplyStatus] = useState<ApplyStatus | null>(null)
++	const [applyStatusState, setApplyStatusState] = useState(
++		initialApplyStatusState,
++	)
+ 	const [voteTally, setVoteTally] = useState<{
+ 		pollId: string
+ 		counts: Record<string, number>
+ 	} | null>(null)
+ 	const [toast, setToast] = useState<string | null>(null)
+ 
+ 	const playerRef = useRef<StrudelPlayerRef | null>(null)
+ 	const seededRef = useRef(false)
+ 	const appliedCodeRef = useRef<string | null>(null)
+ 	const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
++	// Monotonic badge tokens, and the token reserved by an Undo click so the
++	// undo's own `code_update` frame shares it (see `frontend/lib/apply-status`).
++	const applySeqRef = useRef(0)
++	const pendingUndoSeqRef = useRef<number | null>(null)
+ 
+ 	const startRoom = useMutation(trpc.rooms.start.mutationOptions())
+ 	const undoChange = useMutation(trpc.rooms.undo.mutationOptions())
+ 	const skipPoll = useMutation(trpc.rooms.skip.mutationOptions())
+ 	const endRoom = useMutation(trpc.rooms.end.mutationOptions())
+ 	const reportApplyResult = useMutation(
+ 		trpc.rooms.reportApplyResult.mutationOptions(),
+ 	)
+ 
+ 	const refetchRoom = roomQuery.refetch
+ 
++	const dispatchApplyStatus = useCallback((fact: ApplyStatusFact) => {
++		setApplyStatusState((state) => reduceApplyStatus(state, fact))
++	}, [])
++
++	/**
++	 * Claim the next badge token. Every operation that may write the badge calls
++	 * this when it starts, so a result that completes out of order is rejected as
++	 * superseded instead of overwriting the newer operation's badge.
++	 */
++	const beginApplyOperation = useCallback((): number => {
++		applySeqRef.current += 1
++		const seq = applySeqRef.current
++		setApplyStatusState((state) =>
++			reduceApplyStatus(state, { type: 'start', seq }),
++		)
++		return seq
++	}, [])
++
+ 	const showToast = useCallback((message: string) => {
+ 		setToast(message)
+ 		if (toastTimerRef.current !== null) clearTimeout(toastTimerRef.current)
+ 		toastTimerRef.current = setTimeout(() => {
+ 			toastTimerRef.current = null
+ 			setToast(null)
+ 		}, 6000)
+ 	}, [])
+ 
+ 	useEffect(() => {
+@@ -126,59 +151,90 @@ function HostConsole({ roomId }: { roomId: string }) {
+ 
+ 	// Seed and reconnect applies are already-applied server versions; there is
+ 	// no candidate to report. Only surface audible failures.
+ 	const handlePlayerResult = useCallback(
+ 		(result: ApplyResult) => {
+ 			if (!result.ok) showToast(`Audio error: ${result.error}`)
+ 		},
+ 		[showToast],
+ 	)
+ 
++	const reportApply = useCallback(
++		(event: CodeUpdateEvent, result: ApplyResult) => {
++			// `initial` and `undo` versions are already marked applied server-side;
++			// reportApplyResult only accepts candidates.
++			if (event.kind !== 'evolution' && event.kind !== 'outro') return
++			reportApplyResult.mutate(
++				{
++					roomId,
++					versionId: event.versionId,
++					ok: result.ok,
++					error: result.ok ? undefined : result.error,
++				},
++				{
++					onError: (error) => {
++						showToast(`Change not confirmed: ${error.message}`)
++					},
++				},
++			)
++		},
++		[reportApplyResult, roomId, showToast],
++	)
++
++	/**
++	 * Resolve the badge token for an incoming `code_update`. The undo frame
++	 * belongs to the Undo click that is already in flight, so it reuses the token
++	 * that click reserved; any other frame claims a fresh one.
++	 */
++	const claimSeqForFrame = useCallback(
++		(kind: CodeUpdateEvent['kind']): number => {
++			if (kind !== 'undo') return beginApplyOperation()
++			const reserved = pendingUndoSeqRef.current
++			if (reserved === null) return beginApplyOperation()
++			pendingUndoSeqRef.current = null
++			return reserved
++		},
++		[beginApplyOperation],
++	)
++
+ 	const handleCodeUpdate = useCallback(
+ 		(event: CodeUpdateEvent) => {
+ 			const player = playerRef.current
+ 			if (!player) return
+ 			// Start publishes `initial` while the seed effect may already be
+ 			// applying the same code from the refetched room; skip the duplicate.
+ 			if (event.kind === 'initial' && appliedCodeRef.current === event.code) {
+ 				return
+ 			}
+ 			appliedCodeRef.current = event.code
++			const seq = claimSeqForFrame(event.kind)
++			// The host asked for this revert, so its outcome is `reverted` whichever
++			// writer reports it (the undo frame or the mutation response).
++			const successFact: ApplyStatusFact =
++				event.kind === 'undo'
++					? { type: 'reverted', seq }
++					: { type: 'applied', seq }
+ 			void player.applyPattern(event.code).then((result) => {
+ 				if (result.ok) {
+ 					setDisplayCode(event.code)
+-					setApplyStatus({ text: 'change applied', tone: 'success' })
++					dispatchApplyStatus(successFact)
+ 				} else {
+-					setApplyStatus({
+-						text: `change rejected: ${result.error}`,
+-						tone: 'error',
++					dispatchApplyStatus({
++						type: 'failed',
++						seq,
++						error: result.error,
+ 					})
+ 				}
+-				// `initial` and `undo` versions are already marked applied
+-				// server-side; reportApplyResult only accepts candidates.
+-				if (event.kind !== 'evolution' && event.kind !== 'outro') return
+-				reportApplyResult.mutate(
+-					{
+-						roomId,
+-						versionId: event.versionId,
+-						ok: result.ok,
+-						error: result.ok ? undefined : result.error,
+-					},
+-					{
+-						onError: (error) => {
+-							showToast(`Change not confirmed: ${error.message}`)
+-						},
+-					},
+-				)
++				reportApply(event, result)
+ 			})
+ 		},
+-		[reportApplyResult, roomId, showToast],
++		[claimSeqForFrame, dispatchApplyStatus, reportApply],
+ 	)
+ 
+ 	const handleEvent = useCallback(
+ 		(event: WsEvent) => {
+ 			switch (event.type) {
+ 				case 'code_update':
+ 					handleCodeUpdate(event)
+ 					break
+ 				case 'vote_count':
+ 					setVoteTally({ pollId: event.pollId, counts: event.counts })
+@@ -187,33 +243,36 @@ function HostConsole({ roomId }: { roomId: string }) {
+ 				case 'poll_closed':
+ 					// Refetch rather than using the payload: the event carries option
+ 					// labels (no keys) and no zero-filled counts, and a poll that opens
+ 					// with zero votes must still show up on the console.
+ 					void refetchRoom()
+ 					break
+ 				case 'warning':
+ 					showToast(event.message)
+ 					break
+ 				case 'pattern_rejected':
+-					setApplyStatus({
+-						text: `change rejected: ${event.error}`,
+-						tone: 'error',
++					// Backstop for a rejected apply the browser could not confirm; it
++					// belongs to the newest operation.
++					dispatchApplyStatus({
++						type: 'failed',
++						seq: applySeqRef.current,
++						error: event.error,
+ 					})
+ 					break
+ 				case 'room_status':
+ 					void refetchRoom()
+ 					break
+ 				default:
+ 					break
+ 			}
+ 		},
+-		[handleCodeUpdate, refetchRoom, showToast],
++		[dispatchApplyStatus, handleCodeUpdate, refetchRoom, showToast],
+ 	)
+ 
+ 	// Spec "Host WS drop": the browser is the audio engine, so a dropped socket
+ 	// means playback may have stopped. Refetch the server truth and re-apply.
+ 	const handleReconnect = useCallback(() => {
+ 		void (async () => {
+ 			try {
+ 				const fresh = await queryClient.fetchQuery(
+ 					trpc.rooms.get.queryOptions({ roomId }),
+ 				)
+@@ -360,30 +419,36 @@ function HostConsole({ roomId }: { roomId: string }) {
+ 					) : null}
+ 
+ 					{room.status === 'live' || room.status === 'outro' ? (
+ 						<>
+ 							<button
+ 								type="button"
+ 								className="btn"
+ 								data-testid="undo"
+ 								disabled={undoChange.isPending}
+ 								onClick={() => {
++									// Reserve the badge token before the request goes out: the undo
++									// frame arrives on the socket and reuses it, so the frame and the
++									// mutation response always agree on the outcome.
++									const seq = beginApplyOperation()
++									pendingUndoSeqRef.current = seq
+ 									undoChange.mutate(
+ 										{ roomId },
+ 										{
+ 											onSuccess: () => {
+-												setApplyStatus({
+-													text: 'reverted',
+-													tone: 'warning',
+-												})
++												dispatchApplyStatus({ type: 'reverted', seq })
+ 												void refetchRoom()
+ 											},
++											onError: () => {
++												// No undo happened, so no frame will claim the token.
++												pendingUndoSeqRef.current = null
++											},
+ 										},
+ 									)
+ 								}}
+ 							>
+ 								Undo last change
+ 							</button>
+ 							<button
+ 								type="button"
+ 								className="btn"
+ 								data-testid="skip-poll"
+@@ -418,26 +483,26 @@ function HostConsole({ roomId }: { roomId: string }) {
+ 							End set
+ 						</button>
+ 					) : null}
+ 				</div>
+ 
+ 				<p className="text-xs opacity-60">
+ 					Click anywhere to unlock audio — browsers never resume audio from
+ 					keyboard-only activation.
+ 				</p>
+ 
+-				{applyStatus ? (
++				{applyStatusState.status ? (
+ 					<span
+-						className={`badge ${APPLY_STATUS_CLASS[applyStatus.tone]}`}
++						className={`badge ${APPLY_STATUS_CLASS[applyStatusState.status.tone]}`}
+ 						data-testid="apply-status"
+ 					>
+-						{applyStatus.text}
++						{applyStatusState.status.text}
+ 					</span>
+ 				) : null}
+ 
+ 				{mutationError ? (
+ 					<div className="alert alert-error" data-testid="control-error">
+ 						{mutationError.message}
+ 					</div>
+ 				) : null}
+ 
+ 				{openPoll && pollOptions.length > 0 ? (

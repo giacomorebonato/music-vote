@@ -1,5 +1,4 @@
 .pi-subagents/
-.superpowers/
 node_modules/
 dist/
 prisma/dev.db

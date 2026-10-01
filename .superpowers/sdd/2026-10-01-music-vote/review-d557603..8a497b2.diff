@@ -1,0 +1,298 @@
+# Review package: d557603..8a497b2
+
+## Commits
+8a497b2 fix(polls): restore mid-window close timer, in-option tally, continue resumes polling
+
+## Files changed
+ backend/polls/__tests__/scheduler.test.ts | 125 ++++++++++++++++++++++++++++++
+ backend/polls/scheduler.ts                |  48 ++++++++++--
+ 2 files changed, 167 insertions(+), 6 deletions(-)
+
+## Diff
+diff --git a/backend/polls/__tests__/scheduler.test.ts b/backend/polls/__tests__/scheduler.test.ts
+index 980b2e6..5a606e4 100644
+--- a/backend/polls/__tests__/scheduler.test.ts
++++ b/backend/polls/__tests__/scheduler.test.ts
+@@ -559,10 +559,135 @@ test('tie-break uses same seed deterministically and logs seed', async () => {
+ 			],
+ 			status: 'queued',
+ 		},
+ 	})
+ 	const winnerB = await runTiePoll(pollB.id)
+ 	expect(winnerA).toBe(winnerB)
+ 
+ 	console.info = realInfo
+ 	scheduler.disarmScheduler(room.id)
+ })
++
++test('restoreSchedulers arms close timer for non-overdue open poll', async () => {
++	const host = await makeHost()
++	const room = await makeRoom(host.id)
++	const now = new Date(fakeClock.now())
++	const poll = await prisma.poll.create({
++		data: {
++			roomId: room.id,
++			seq: 1,
++			kind: 'evolution',
++			question: 'Mid-window?',
++			options: [
++				{ key: 'yes', label: 'Yes' },
++				{ key: 'no', label: 'No' },
++			],
++			status: 'open',
++			openedAt: now,
++			closesAt: new Date(now.getTime() + 3000),
++		},
++	})
++	await vote(poll.id, 'yes', 'v1')
++
++	await scheduler.restoreSchedulers()
++
++	expect(scheduler.isSchedulerArmed(room.id)).toBe(true)
++
++	await fakeClock.tick(3000)
++
++	const closed = await prisma.poll.findUnique({ where: { id: poll.id } })
++	expect(closed?.status).toBe('closed')
++	expect(closed?.winningOption).toBe('yes')
++
++	const versions = await prisma.patternVersion.findMany({
++		where: { roomId: room.id },
++	})
++	expect(versions).toHaveLength(1)
++
++	const codeUpdate = hostEvents().find(
++		(e) => e[1].type === 'code_update' && e[1].kind === 'evolution',
++	)
++	expect(codeUpdate).toBeDefined()
++
++	scheduler.disarmScheduler(room.id)
++})
++
++test('off-option votes are ignored and do not crash', async () => {
++	const host = await makeHost()
++	const room = await makeRoom(host.id, { pollIntervalSec: 10 })
++	const poll = await makePoll(room.id, 1)
++
++	scheduler.armScheduler(room.id)
++	await fakeClock.tick(0)
++
++	await vote(poll.id, 'yes', 'v1')
++	await vote(poll.id, 'invalid-choice', 'v2')
++	await vote(poll.id, 'no', 'v3')
++	await vote(poll.id, 'yes', 'v4')
++
++	await fakeClock.tick(5000)
++
++	const closed = await prisma.poll.findUnique({ where: { id: poll.id } })
++	expect(closed?.status).toBe('closed')
++	expect(closed?.winningOption).toBe('yes')
++
++	const versions = await prisma.patternVersion.findMany({
++		where: { roomId: room.id },
++	})
++	expect(versions).toHaveLength(1)
++
++	scheduler.disarmScheduler(room.id)
++})
++
++test('end poll continue queues next evolution and keeps room live', async () => {
++	const host = await makeHost()
++	const room = await makeRoom(host.id, {
++		lengthSec: 120,
++		pollIntervalSec: 20,
++	})
++	const poll = await prisma.poll.create({
++		data: {
++			roomId: room.id,
++			seq: 1,
++			kind: 'end',
++			question: 'End the set?',
++			options: [
++				{ key: 'wrap', label: 'Wrap it up' },
++				{ key: 'continue', label: 'Keep going' },
++			],
++			status: 'queued',
++		},
++	})
++
++	scheduler.armScheduler(room.id)
++	await fakeClock.tick(0)
++
++	const open = await prisma.poll.findUnique({ where: { id: poll.id } })
++	expect(open?.status).toBe('open')
++
++	await vote(poll.id, 'continue', 'v1')
++	await fakeClock.tick(5000)
++
++	const closed = await prisma.poll.findUnique({ where: { id: poll.id } })
++	expect(closed?.status).toBe('closed')
++	expect(closed?.winningOption).toBe('continue')
++
++	const updatedRoom = await prisma.room.findUnique({ where: { id: room.id } })
++	expect(updatedRoom?.status).toBe('live')
++
++	const nextEvolution = await prisma.poll.findFirst({
++		where: {
++			roomId: room.id,
++			kind: 'evolution',
++			status: { in: ['queued', 'open'] },
++		},
++		orderBy: { seq: 'desc' },
++	})
++	expect(nextEvolution).toBeDefined()
++
++	const outroStarted = hostEvents().some(
++		(e) => e[1].type === 'code_update' && e[1].kind === 'outro',
++	)
++	expect(outroStarted).toBe(false)
++
++	scheduler.disarmScheduler(room.id)
++})
+diff --git a/backend/polls/scheduler.ts b/backend/polls/scheduler.ts
+index aed3cbe..9ecd6cf 100644
+--- a/backend/polls/scheduler.ts
++++ b/backend/polls/scheduler.ts
+@@ -134,20 +134,41 @@ async function armLive(room: Room): Promise<void> {
+ 			await ensureEndPollAndOpen(room.id)
+ 		}, insertAt - now)
+ 	}
+ 
+ 	const intervalMs = Math.max(room.pollIntervalSec, MIN_INTERVAL_SECS) * 1000
+ 	scheduler.intervalHandle = clock.setTimeout(async () => {
+ 		await liveTick(room.id, intervalMs)
+ 	}, intervalMs)
+ 
+ 	await openNextQueuedPoll(room.id)
++	await armExistingPollClose(room.id)
++}
++
++async function armExistingPollClose(roomId: string): Promise<void> {
++	const scheduler = active.get(roomId)
++	if (!scheduler || scheduler.pollCloseHandle !== undefined) return
++
++	const openPoll = await prisma.poll.findFirst({
++		where: { roomId, status: 'open' },
++	})
++	if (!openPoll?.closesAt) return
++
++	const remaining = openPoll.closesAt.getTime() - clock.now()
++	if (remaining <= 0) {
++		await closePoll(openPoll.id, roomId)
++		return
++	}
++
++	scheduler.pollCloseHandle = clock.setTimeout(async () => {
++		await closePoll(openPoll.id, roomId)
++	}, remaining)
+ }
+ 
+ async function liveTick(roomId: string, intervalMs: number): Promise<void> {
+ 	const scheduler = active.get(roomId)
+ 	if (!scheduler) return
+ 	scheduler.intervalHandle = undefined
+ 
+ 	const room = await prisma.room.findUnique({ where: { id: roomId } })
+ 	if (room?.status !== 'live') {
+ 		disarmScheduler(roomId)
+@@ -305,20 +326,23 @@ async function closePoll(pollId: string, roomId: string): Promise<void> {
+ 	hub.publishAudience(roomId, {
+ 		type: 'poll_closed',
+ 		pollId: poll.id,
+ 		winningOption: winner,
+ 	})
+ 
+ 	if (winner) {
+ 		if (poll.kind === 'end') {
+ 			if (winner === 'wrap') {
+ 				await triggerEndRoom(roomId, room.hostId)
++			} else if (winner === 'continue') {
++				await queueNextEvolution(roomId, room, { afterContinue: true })
++				await openNextQueuedPoll(roomId)
+ 			}
+ 		} else if (poll.kind === 'evolution') {
+ 			await runEvolution(room, poll, winner)
+ 		}
+ 	}
+ 
+ 	if (poll.kind === 'evolution') {
+ 		await queueNextEvolution(roomId, room)
+ 	}
+ }
+@@ -376,32 +400,41 @@ async function updateRoomDoc(
+ 		question,
+ 		winner,
+ 		changeSummary,
+ 	)
+ 	await prisma.room.update({
+ 		where: { id: room.id },
+ 		data: { stateDoc: next as unknown as Prisma.InputJsonObject },
+ 	})
+ }
+ 
+-async function queueNextEvolution(roomId: string, room: Room): Promise<void> {
++async function queueNextEvolution(
++	roomId: string,
++	room: Room,
++	opts?: { afterContinue?: boolean },
++): Promise<void> {
+ 	const existingEnd = await prisma.poll.findFirst({
+-		where: { roomId, kind: 'end' },
++		where: {
++			roomId,
++			kind: 'end',
++			status: { in: ['queued', 'open'] },
++		},
+ 	})
+ 	if (existingEnd) return
+ 
+ 	const now = clock.now()
+ 	const insertAt = room.createdAt.getTime() + room.lengthSec * 750
+-	if (now >= insertAt) return
+-
+ 	const intervalMs = Math.max(room.pollIntervalSec, MIN_INTERVAL_SECS) * 1000
+-	if (now + intervalMs >= insertAt) return
++	if (!opts?.afterContinue) {
++		if (now >= insertAt) return
++		if (now + intervalMs >= insertAt) return
++	}
+ 
+ 	const last = await prisma.poll.findFirst({
+ 		where: { roomId },
+ 		orderBy: { seq: 'desc' },
+ 	})
+ 	const seq = (last?.seq ?? 0) + 1
+ 	const provider = getLlmProvider()
+ 	const question = await generateNextQuestion(
+ 		provider,
+ 		room.stateDoc as unknown as StateDoc,
+@@ -475,25 +508,28 @@ export async function restoreSchedulers(): Promise<void> {
+ function parseOptions(options: unknown): PollOption[] {
+ 	if (Array.isArray(options)) return options as PollOption[]
+ 	return []
+ }
+ 
+ function tallyVotes(
+ 	votes: { choice: string }[],
+ 	options: PollOption[],
+ ): Map<string, number> {
+ 	const counts = new Map<string, number>()
++	const validKeys = new Set(options.map((option) => option.key))
+ 	for (const option of options) {
+ 		counts.set(option.key, 0)
+ 	}
+ 	for (const vote of votes) {
+-		counts.set(vote.choice, (counts.get(vote.choice) ?? 0) + 1)
++		if (validKeys.has(vote.choice)) {
++			counts.set(vote.choice, (counts.get(vote.choice) ?? 0) + 1)
++		}
+ 	}
+ 	return counts
+ }
+ 
+ function pickWinner(
+ 	options: PollOption[],
+ 	votes: { choice: string }[],
+ 	pollId: string,
+ ): string | null {
+ 	if (votes.length === 0) return null

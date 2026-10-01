@@ -1,0 +1,579 @@
+# Review package: 0b56417..a1ca394
+
+## Commits
+a1ca394 fix(realtime): authenticated non-owners join as audience
+6677e0d feat(realtime): per-room ws hub, audience/host channels
+
+## Files changed
+ backend/realtime/__tests__/hub.test.ts | 183 +++++++++++++++++++++++++++++++++
+ backend/realtime/hub.ts                | 148 ++++++++++++++++++++++++++
+ backend/server.ts                      |  60 ++++++++++-
+ shared/realtime/events.ts              |  76 ++++++++++++++
+ 4 files changed, 463 insertions(+), 4 deletions(-)
+
+## Diff
+diff --git a/backend/realtime/__tests__/hub.test.ts b/backend/realtime/__tests__/hub.test.ts
+new file mode 100644
+index 0000000..52f56b3
+--- /dev/null
++++ b/backend/realtime/__tests__/hub.test.ts
+@@ -0,0 +1,183 @@
++import { expect, test } from 'bun:test'
++import {
++	createRealtimeHub,
++	createWsUpgradeHandler,
++	type RoleResolver,
++	type SocketData,
++} from '@backend/realtime/hub'
++import type { WsEvent } from '@shared/realtime/events'
++import type { Server } from 'bun'
++
++type TestSetup = {
++	server: Server<SocketData>
++	hub: ReturnType<typeof createRealtimeHub>
++}
++
++function startServer(resolveRole: RoleResolver): TestSetup {
++	const hub = createRealtimeHub()
++	const upgrade = createWsUpgradeHandler({ resolveRole })
++	const server = Bun.serve<SocketData>({
++		port: 0,
++		routes: {
++			'/ws': upgrade,
++		},
++		websocket: {
++			open(ws) {
++				const { roomId, role } = ws.data
++				hub.joinRoom(ws, roomId, role, role === 'host')
++			},
++			close(ws) {
++				hub.onClose(ws)
++			},
++			message() {
++				// client -> server not used yet
++			},
++		},
++	})
++	return { server, hub }
++}
++
++function wsUrl(server: Server<SocketData>, roomId: string): string {
++	return `ws://localhost:${server.port}/ws?room=${roomId}`
++}
++
++function openSocket(url: string): WebSocket {
++	const ws = new WebSocket(url)
++	return ws
++}
++
++function waitForOpen(ws: WebSocket): Promise<void> {
++	return new Promise((resolve, reject) => {
++		ws.onopen = () => resolve()
++		ws.onerror = () => reject(new Error('websocket error'))
++	})
++}
++
++function waitForClose(ws: WebSocket): Promise<void> {
++	return new Promise((resolve) => {
++		ws.onclose = () => resolve()
++	})
++}
++
++function collectMessages(ws: WebSocket): WsEvent[] {
++	const messages: WsEvent[] = []
++	ws.onmessage = (event) => {
++		messages.push(JSON.parse(event.data as string) as WsEvent)
++	}
++	return messages
++}
++
++test('two audience clients receive a published audience event', async () => {
++	const resolveRole: RoleResolver = async () => ({ role: 'audience' })
++	const { server, hub } = startServer(resolveRole)
++
++	const ws1 = openSocket(wsUrl(server, 'room-a'))
++	const ws2 = openSocket(wsUrl(server, 'room-a'))
++	const messages1 = collectMessages(ws1)
++	const messages2 = collectMessages(ws2)
++	await Promise.all([waitForOpen(ws1), waitForOpen(ws2)])
++
++	const event: WsEvent = {
++		type: 'poll_opened',
++		poll: {
++			id: 'poll-1',
++			question: 'Add melody?',
++			options: ['yes', 'no'],
++			closesAt: '2026-10-01T00:00:00.000Z',
++		},
++	}
++	hub.publishAudience('room-a', event)
++
++	await new Promise((resolve) => setTimeout(resolve, 50))
++	expect(messages1).toHaveLength(1)
++	expect(messages1[0]).toEqual(event)
++	expect(messages2).toHaveLength(1)
++	expect(messages2[0]).toEqual(event)
++
++	ws1.close()
++	ws2.close()
++	await Promise.all([waitForClose(ws1), waitForClose(ws2)])
++	server.stop(true)
++})
++
++test('host event is not delivered to audience clients', async () => {
++	const resolveRole: RoleResolver = async () => ({ role: 'audience' })
++	const { server, hub } = startServer(resolveRole)
++
++	const ws = openSocket(wsUrl(server, 'room-a'))
++	const messages = collectMessages(ws)
++	await waitForOpen(ws)
++
++	hub.publishAudience('room-a', {
++		type: 'poll_opened',
++		poll: {
++			id: 'poll-1',
++			question: 'Add melody?',
++			options: ['yes', 'no'],
++			closesAt: '2026-10-01T00:00:00.000Z',
++		},
++	})
++	await new Promise((resolve) => setTimeout(resolve, 20))
++	expect(messages).toHaveLength(1)
++
++	hub.publishHost('room-a', {
++		type: 'vote_count',
++		pollId: 'poll-1',
++		yes: 3,
++		no: 1,
++	})
++	await new Promise((resolve) => setTimeout(resolve, 20))
++	expect(messages).toHaveLength(1)
++
++	ws.close()
++	await waitForClose(ws)
++	server.stop(true)
++})
++
++test('authenticated non-owner joins audience channel, not host', async () => {
++	const resolveRole: RoleResolver = async () => ({ role: 'audience' })
++	const { server, hub } = startServer(resolveRole)
++
++	const ws = openSocket(wsUrl(server, 'room-a'))
++	const messages = collectMessages(ws)
++	await waitForOpen(ws)
++
++	hub.publishAudience('room-a', {
++		type: 'poll_opened',
++		poll: {
++			id: 'poll-1',
++			question: 'Add melody?',
++			options: ['yes', 'no'],
++			closesAt: '2026-10-01T00:00:00.000Z',
++		},
++	})
++	await new Promise((resolve) => setTimeout(resolve, 20))
++	expect(messages).toHaveLength(1)
++
++	hub.publishHost('room-a', {
++		type: 'vote_count',
++		pollId: 'poll-1',
++		yes: 3,
++		no: 1,
++	})
++	await new Promise((resolve) => setTimeout(resolve, 20))
++	expect(messages).toHaveLength(1)
++
++	ws.close()
++	await waitForClose(ws)
++	server.stop(true)
++})
++
++test('nonexistent room join is rejected and connection closed', async () => {
++	const resolveRole: RoleResolver = async () => ({
++		error: new Response('room not found', { status: 404 }),
++	})
++	const { server } = startServer(resolveRole)
++
++	const ws = openSocket(wsUrl(server, 'room-a'))
++	const closed = waitForClose(ws)
++	await closed
++	expect(ws.readyState).toBe(WebSocket.CLOSED)
++
++	server.stop(true)
++})
+diff --git a/backend/realtime/hub.ts b/backend/realtime/hub.ts
+new file mode 100644
+index 0000000..d0bd42a
+--- /dev/null
++++ b/backend/realtime/hub.ts
+@@ -0,0 +1,148 @@
++import type { WsEvent } from '@shared/realtime/events'
++import type { Server, ServerWebSocket } from 'bun'
++
++/** @public */
++export type ChannelRole = 'audience' | 'host'
++
++/** @public */
++export type SocketData = {
++	roomId: string
++	role: ChannelRole
++}
++
++/** @public */
++export type RealtimeHub = {
++	/** Register a socket in a room/channel. */
++	joinRoom(
++		ws: ServerWebSocket<SocketData>,
++		roomId: string,
++		role: ChannelRole,
++		isHost: boolean,
++	): void
++	/** Remove a socket from all channels (call from the server close handler). */
++	onClose(ws: ServerWebSocket<SocketData>): void
++	/** Broadcast an event to every audience socket in the room. */
++	publishAudience(roomId: string, event: WsEvent): void
++	/** Send an event to the host socket(s) in the room. */
++	publishHost(roomId: string, event: WsEvent): void
++}
++
++type RoomChannels = {
++	audience: Set<ServerWebSocket<SocketData>>
++	host: Set<ServerWebSocket<SocketData>>
++}
++
++type SocketMeta = {
++	roomId: string
++	role: ChannelRole
++}
++
++/** @public */
++export function createRealtimeHub(): RealtimeHub {
++	const rooms = new Map<string, RoomChannels>()
++	const sockets = new WeakMap<ServerWebSocket<SocketData>, SocketMeta>()
++
++	function roomChannels(roomId: string): RoomChannels {
++		let channels = rooms.get(roomId)
++		if (!channels) {
++			channels = { audience: new Set(), host: new Set() }
++			rooms.set(roomId, channels)
++		}
++		return channels
++	}
++
++	function remove(ws: ServerWebSocket<SocketData>): void {
++		const meta = sockets.get(ws)
++		if (!meta) return
++		const channels = rooms.get(meta.roomId)
++		if (channels) {
++			channels[meta.role].delete(ws)
++			if (channels.audience.size === 0 && channels.host.size === 0) {
++				rooms.delete(meta.roomId)
++			}
++		}
++		sockets.delete(ws)
++	}
++
++	function publish(roomId: string, role: ChannelRole, event: WsEvent): void {
++		const channels = rooms.get(roomId)
++		if (!channels) return
++		const data = JSON.stringify(event)
++		for (const ws of channels[role]) {
++			if (ws.readyState !== 1) {
++				remove(ws)
++				continue
++			}
++			try {
++				ws.send(data)
++			} catch {
++				remove(ws)
++			}
++		}
++	}
++
++	const hub: RealtimeHub = {
++		joinRoom(ws, roomId, role, _isHost): void {
++			const channels = roomChannels(roomId)
++			channels[role].add(ws)
++			sockets.set(ws, { roomId, role })
++		},
++
++		onClose(ws): void {
++			remove(ws)
++		},
++
++		publishAudience(roomId, event): void {
++			publish(roomId, 'audience', event)
++		},
++
++		publishHost(roomId, event): void {
++			publish(roomId, 'host', event)
++		},
++	}
++	return hub
++}
++
++/** @public */
++export type RoleResult = { role: ChannelRole } | { error: Response }
++
++/** @public */
++export type RoleResolver = (req: Request, roomId: string) => Promise<RoleResult>
++
++/** @public */
++export function createWsUpgradeHandler({
++	resolveRole,
++}: {
++	resolveRole: RoleResolver
++}): (
++	req: Request,
++	server: Server<SocketData>,
++) => Promise<Response | undefined> {
++	return async (req, server) => {
++		const url = new URL(req.url)
++		const roomId = url.searchParams.get('room')
++		if (!roomId) {
++			return new Response(JSON.stringify({ error: 'missing room' }), {
++				status: 400,
++				headers: { 'content-type': 'application/json' },
++			})
++		}
++
++		const result = await resolveRole(req, roomId)
++		if ('error' in result) return result.error
++
++		const success = server.upgrade(req, {
++			data: { roomId, role: result.role },
++		})
++		if (!success) {
++			return new Response(JSON.stringify({ error: 'upgrade failed' }), {
++				status: 500,
++				headers: { 'content-type': 'application/json' },
++			})
++		}
++		return undefined
++	}
++}
++
++/** @public Convenience singleton used by the production server. */
++export const hub = createRealtimeHub()
+diff --git a/backend/server.ts b/backend/server.ts
+index e439fa6..64e6fb1 100644
+--- a/backend/server.ts
++++ b/backend/server.ts
+@@ -1,24 +1,54 @@
+ import { auth } from '@backend/auth/auth'
++import { prisma } from '@backend/db/client'
+ import {
+ 	normalizeTrpcRequest,
+ 	TRPC_ENDPOINT,
+ } from '@backend/normalize-trpc-request'
++import {
++	type ChannelRole,
++	createRealtimeHub,
++	createWsUpgradeHandler,
++	type RoleResolver,
++	type SocketData,
++} from '@backend/realtime/hub'
+ import { createPrerenderHandler } from '@backend/ssr/prerender'
+ import { createContext } from '@backend/trpc/context'
+ import { appRouter } from '@backend/trpc/root'
+ import { PUBLIC_SSR_PATHS } from '@shared/ssr-paths'
+ import { fetchRequestHandler } from '@trpc/server/adapters/fetch'
+ 
+ const isDev = process.env.NODE_ENV !== 'production'
+ const port = Number(process.env.PORT ?? 3000)
+ 
++const hub = createRealtimeHub()
++
++const resolveRole: RoleResolver = async (req, roomId) => {
++	const room = await prisma.room.findUnique({ where: { id: roomId } })
++	if (!room) {
++		return {
++			error: new Response(JSON.stringify({ error: 'room not found' }), {
++				status: 404,
++				headers: { 'content-type': 'application/json' },
++			}),
++		}
++	}
++
++	const session = await auth.api.getSession({ headers: req.headers })
++	if (session?.user?.id === room.hostId) {
++		return { role: 'host' as ChannelRole }
++	}
++	return { role: 'audience' as ChannelRole }
++}
++
++const handleWs = createWsUpgradeHandler({ resolveRole })
++
+ let devIndex: unknown
+ if (isDev) {
+ 	devIndex = (await import('../frontend/index.html')).default
+ }
+ 
+ async function serveDistFile(pathname: string): Promise<Response | null> {
+ 	if (pathname.includes('..')) return null
+ 	const file = Bun.file(`dist${pathname}`)
+ 	if (await file.exists()) return new Response(file)
+ 	return null
+@@ -51,54 +81,76 @@ async function handleApi(req: Request): Promise<Response> {
+ 	}
+ 	if (url.pathname.startsWith('/api/auth')) {
+ 		return auth.handler(req)
+ 	}
+ 	return new Response(JSON.stringify({ error: 'Not found' }), {
+ 		status: 404,
+ 		headers: { 'content-type': 'application/json' },
+ 	})
+ }
+ 
+-const server = Bun.serve({
++const httpServer = Bun.serve<SocketData>({
+ 	port,
+ 	...(isDev
+ 		? {
+ 				// Dev: register /api/* as explicit function routes so they take
+ 				// precedence over the `/*` HTMLBundle wildcard. Bun matches `routes`
+ 				// before `fetch`, and a wildcard HTMLBundle route only accepts
+ 				// GET/HEAD (POST -> 405), which previously broke auth signup and
+ 				// tRPC mutations. The `/*` route serves the SPA shell + HMR for any
+ 				// other path so new client routes need no server change.
++				// /ws is also registered as a route so Bun can upgrade it from the
++				// routes path (the route returns undefined after server.upgrade).
+ 				routes: {
+ 					'/api/auth/*': handleApi,
+ 					'/api/trpc/*': handleApi,
++					'/ws': handleWs,
+ 					'/*': devIndex as unknown as import('bun').HTMLBundle,
+ 				},
+ 				development: { hmr: true, console: true },
+ 			}
+ 		: {
+ 				development: false,
+ 			}),
+-	async fetch(req) {
++	async fetch(req, server) {
++		const url = new URL(req.url)
++
++		if (url.pathname === '/ws') {
++			const upgraded = await handleWs(req, server)
++			if (upgraded !== undefined) return upgraded
++			return new Response(null, { status: 101 })
++		}
++
+ 		// Bot prerender runs first (like the plugin's onRequest hook). Lightpanda's
+ 		// own inner requests self-identify via UA and fall through to the SPA shell.
+ 		if (prerender) {
+ 			const ssrRes = await prerender.handle(req)
+ 			if (ssrRes) return ssrRes
+ 		}
+ 
+-		const url = new URL(req.url)
+ 		if (!isDev) {
+ 			const staticFile = await serveDistFile(url.pathname)
+ 			if (staticFile) return staticFile
+ 		}
+ 		if (url.pathname.startsWith('/api')) {
+ 			return handleApi(req)
+ 		}
+ 		// SPA fallback: serve the shell for any non-static, non-API path so the
+ 		// client router owns routing. New client routes need no server change.
+ 		// Unknown /api/* paths still 404 (handled by handleApi above).
+ 		return new Response(Bun.file('dist/index.html'))
+ 	},
++	websocket: {
++		open(ws) {
++			const { roomId, role } = ws.data
++			hub.joinRoom(ws, roomId, role, role === 'host')
++		},
++		close(ws) {
++			hub.onClose(ws)
++		},
++		message() {
++			// client -> server protocol is not used yet
++		},
++	},
+ })
+ 
+-console.log(`mino-starter on http://localhost:${server.port}`)
++console.log(`mino-starter on http://localhost:${httpServer.port}`)
+diff --git a/shared/realtime/events.ts b/shared/realtime/events.ts
+new file mode 100644
+index 0000000..8f14594
+--- /dev/null
++++ b/shared/realtime/events.ts
+@@ -0,0 +1,76 @@
++/**
++ * Server -> client WebSocket events for a music-vote room.
++ *
++ * Audience channel receives poll lifecycle + room lifecycle.
++ * Host channel receives code updates, live vote counts, warnings, and
++ * rejection notices.
++ */
++
++/** @public */
++export type PollOpenedEvent = {
++	type: 'poll_opened'
++	poll: {
++		id: string
++		question: string
++		options: string[]
++		closesAt: string
++	}
++}
++
++/** @public */
++export type PollClosedEvent = {
++	type: 'poll_closed'
++	pollId: string
++	winningOption: string | null
++}
++
++/** @public */
++export type RoomEndedEvent = {
++	type: 'room_ended'
++}
++
++/** @public */
++export type CodeUpdateEvent = {
++	type: 'code_update'
++	code: string
++	versionId: string
++	kind: 'initial' | 'evolution' | 'undo' | 'outro'
++}
++
++/** @public */
++export type VoteCountEvent = {
++	type: 'vote_count'
++	pollId: string
++	yes: number
++	no: number
++}
++
++/** @public */
++export type RoomStatusEvent = {
++	type: 'room_status'
++	status: string
++}
++
++/** @public */
++export type WarningEvent = {
++	type: 'warning'
++	message: string
++}
++
++/** @public */
++export type PatternRejectedEvent = {
++	type: 'pattern_rejected'
++	versionId: string
++	error: string
++}
++
++/** @public */
++export type WsEvent =
++	| PollOpenedEvent
++	| PollClosedEvent
++	| RoomEndedEvent
++	| CodeUpdateEvent
++	| VoteCountEvent
++	| RoomStatusEvent
++	| WarningEvent
++	| PatternRejectedEvent

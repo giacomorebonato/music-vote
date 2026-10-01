@@ -1,0 +1,243 @@
+# Review package: cb71959..e2a58e9
+
+## Commits
+e2a58e9 fix(host): stop audio at set end, follow poll lifecycle on host channel
+
+## Files changed
+ backend/polls/__tests__/scheduler.test.ts | 38 +++++++++++++++++++++++++++++++
+ backend/polls/scheduler.ts                | 15 ++++++++----
+ frontend/routes/host.tsx                  | 21 +++++++++++++++++
+ 3 files changed, 70 insertions(+), 4 deletions(-)
+
+## Diff
+diff --git a/backend/polls/__tests__/scheduler.test.ts b/backend/polls/__tests__/scheduler.test.ts
+index 1000c8e..9caf225 100644
+--- a/backend/polls/__tests__/scheduler.test.ts
++++ b/backend/polls/__tests__/scheduler.test.ts
+@@ -358,20 +358,58 @@ test('zero votes: null winner, no version, next poll armed', async () => {
+ 		(e) => e[1].type === 'poll_opened' && e[1].poll.id === queued[0].id,
+ 	)
+ 	expect(opened?.[1]).toMatchObject({
+ 		type: 'poll_opened',
+ 		poll: { id: queued[0].id },
+ 	})
+ 
+ 	scheduler.disarmScheduler(room.id)
+ })
+ 
++test('host channel receives poll_opened and poll_closed alongside the audience', async () => {
++	const host = await makeHost()
++	const room = await makeRoom(host.id)
++	const poll = await makePoll(room.id, 1)
++
++	scheduler.armScheduler(room.id)
++	await fakeClock.tick(0)
++
++	// The host console must follow the current poll without any vote landing:
++	// a projector has to show a freshly opened poll even at zero votes.
++	const hostOpened = hostEvents().find((e) => e[1].type === 'poll_opened')
++	expect(hostOpened?.[0]).toBe(room.id)
++	expect(hostOpened?.[1]).toMatchObject({
++		type: 'poll_opened',
++		poll: { id: poll.id, question: 'More drums?' },
++	})
++	const audienceOpened = audienceEvents().find(
++		(e) => e[1].type === 'poll_opened',
++	)
++	expect(audienceOpened?.[1]).toEqual(hostOpened?.[1])
++
++	await fakeClock.tick(5000)
++
++	const hostClosed = hostEvents().find((e) => e[1].type === 'poll_closed')
++	expect(hostClosed?.[0]).toBe(room.id)
++	expect(hostClosed?.[1]).toMatchObject({
++		type: 'poll_closed',
++		pollId: poll.id,
++		winningOption: null,
++	})
++	const audienceClosed = audienceEvents().find(
++		(e) => e[1].type === 'poll_closed',
++	)
++	expect(audienceClosed?.[1]).toEqual(hostClosed?.[1])
++
++	scheduler.disarmScheduler(room.id)
++})
++
+ test('end poll appears at 75% length and wrap wins triggers endRoom', async () => {
+ 	const host = await makeHost()
+ 	const room = await makeRoom(host.id, {
+ 		lengthSec: 60,
+ 		pollIntervalSec: 20,
+ 	})
+ 	const poll1 = await makePoll(room.id, 1)
+ 
+ 	scheduler.armScheduler(room.id)
+ 	await fakeClock.tick(0)
+diff --git a/backend/polls/scheduler.ts b/backend/polls/scheduler.ts
+index e8a9073..4f5d66c 100644
+--- a/backend/polls/scheduler.ts
++++ b/backend/polls/scheduler.ts
+@@ -1,16 +1,17 @@
+ import { prisma } from '@backend/db/client'
+ import { getLlmProvider } from '@backend/llm/provider'
+ import { generateEvolution, generateNextQuestion } from '@backend/music/engine'
+ import { applyChange, type StateDoc } from '@backend/music/state-doc'
+ import { compileCheck } from '@backend/music/validate'
+ import { hub } from '@backend/realtime/hub'
++import type { WsEvent } from '@shared/realtime/events'
+ import type { Prisma, Room } from '../../prisma/generated/client'
+ 
+ /**
+  * Poll scheduler for a live music-vote room.
+  *
+  * The scheduler uses an injected clock so tests can run deterministically
+  * without real sleeps. The default clock delegates to the real timers.
+  *
+  * When MV_E2E_FAST=1 the poll open window shrinks to 5s and the interval clamps
+  * to a minimum of 10s so end-to-end tests can run a real cycle quickly.
+@@ -276,29 +277,33 @@ async function openNextQueuedPoll(roomId: string): Promise<void> {
+ 	if (!queued) return
+ 
+ 	const now = new Date(clock.now())
+ 	const closesAt = new Date(now.getTime() + POLL_OPEN_MS)
+ 	await prisma.poll.update({
+ 		where: { id: queued.id },
+ 		data: { status: 'open', openedAt: now, closesAt },
+ 	})
+ 
+ 	const options = parseOptions(queued.options)
+-	hub.publishAudience(roomId, {
++	const opened: WsEvent = {
+ 		type: 'poll_opened',
+ 		poll: {
+ 			id: queued.id,
+ 			question: queued.question,
+ 			options: options.map((option) => option.label),
+ 			closesAt: closesAt.toISOString(),
+ 		},
+-	})
++	}
++	hub.publishAudience(roomId, opened)
++	// Host console follows the live poll (question + bars), including a poll
++	// that opens with zero votes; audience publication is unchanged.
++	hub.publishHost(roomId, opened)
+ 
+ 	const scheduler = active.get(roomId)
+ 	if (scheduler) {
+ 		if (scheduler.pollCloseHandle !== undefined) {
+ 			clock.clearTimeout(scheduler.pollCloseHandle)
+ 		}
+ 		scheduler.pollCloseHandle = clock.setTimeout(async () => {
+ 			await closePoll(queued.id, roomId)
+ 		}, POLL_OPEN_MS)
+ 	}
+@@ -317,25 +322,27 @@ async function closePoll(pollId: string, roomId: string): Promise<void> {
+ 	const scheduler = active.get(roomId)
+ 	if (scheduler) scheduler.pollCloseHandle = undefined
+ 
+ 	const options = parseOptions(poll.options)
+ 	const winner = pickWinner(options, poll.votes, poll.id)
+ 	await prisma.poll.update({
+ 		where: { id: pollId },
+ 		data: { status: 'closed', winningOption: winner },
+ 	})
+ 
+-	hub.publishAudience(roomId, {
++	const closed: WsEvent = {
+ 		type: 'poll_closed',
+ 		pollId: poll.id,
+ 		winningOption: winner,
+-	})
++	}
++	hub.publishAudience(roomId, closed)
++	hub.publishHost(roomId, closed)
+ 
+ 	if (winner) {
+ 		if (poll.kind === 'end') {
+ 			if (winner === 'wrap') {
+ 				await triggerEndRoom(roomId, room.hostId)
+ 			} else if (winner === 'continue') {
+ 				const current = active.get(roomId)
+ 				if (current) current.continuing = true
+ 				await queueNextEvolution(roomId, room, { afterContinue: true })
+ 				await openNextQueuedPoll(roomId)
+diff --git a/frontend/routes/host.tsx b/frontend/routes/host.tsx
+index 9e27581..30e3dfe 100644
+--- a/frontend/routes/host.tsx
++++ b/frontend/routes/host.tsx
+@@ -108,33 +108,47 @@ function HostConsole({ roomId }: { roomId: string }) {
+ 	useEffect(() => {
+ 		if (currentCode === null) return
+ 		setDisplayCode(currentCode)
+ 		if (seededRef.current) return
+ 		if (appliedCodeRef.current === currentCode) return
+ 		seededRef.current = true
+ 		appliedCodeRef.current = currentCode
+ 		setPlayerCode(currentCode)
+ 	}, [currentCode])
+ 
++	// The server stops publishing code once the outro finishes, so the host
++	// browser has to hush the engine itself. Keyed on the status string so it
++	// runs exactly once per transition into `ended` (idempotent across refetches).
++	const roomStatus = room?.status
++	useEffect(() => {
++		if (roomStatus !== 'ended') return
++		playerRef.current?.stop()
++	}, [roomStatus])
++
+ 	// Seed and reconnect applies are already-applied server versions; there is
+ 	// no candidate to report. Only surface audible failures.
+ 	const handlePlayerResult = useCallback(
+ 		(result: ApplyResult) => {
+ 			if (!result.ok) showToast(`Audio error: ${result.error}`)
+ 		},
+ 		[showToast],
+ 	)
+ 
+ 	const handleCodeUpdate = useCallback(
+ 		(event: CodeUpdateEvent) => {
+ 			const player = playerRef.current
+ 			if (!player) return
++			// Start publishes `initial` while the seed effect may already be
++			// applying the same code from the refetched room; skip the duplicate.
++			if (event.kind === 'initial' && appliedCodeRef.current === event.code) {
++				return
++			}
+ 			appliedCodeRef.current = event.code
+ 			void player.applyPattern(event.code).then((result) => {
+ 				if (result.ok) {
+ 					setDisplayCode(event.code)
+ 					setApplyStatus({ text: 'change applied', tone: 'success' })
+ 				} else {
+ 					setApplyStatus({
+ 						text: `change rejected: ${result.error}`,
+ 						tone: 'error',
+ 					})
+@@ -162,20 +176,27 @@ function HostConsole({ roomId }: { roomId: string }) {
+ 
+ 	const handleEvent = useCallback(
+ 		(event: WsEvent) => {
+ 			switch (event.type) {
+ 				case 'code_update':
+ 					handleCodeUpdate(event)
+ 					break
+ 				case 'vote_count':
+ 					setVoteTally({ pollId: event.pollId, counts: event.counts })
+ 					break
++				case 'poll_opened':
++				case 'poll_closed':
++					// Refetch rather than using the payload: the event carries option
++					// labels (no keys) and no zero-filled counts, and a poll that opens
++					// with zero votes must still show up on the console.
++					void refetchRoom()
++					break
+ 				case 'warning':
+ 					showToast(event.message)
+ 					break
+ 				case 'pattern_rejected':
+ 					setApplyStatus({
+ 						text: `change rejected: ${event.error}`,
+ 						tone: 'error',
+ 					})
+ 					break
+ 				case 'room_status':

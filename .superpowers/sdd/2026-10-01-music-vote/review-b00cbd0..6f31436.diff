@@ -1,0 +1,32 @@
+# Review package: b00cbd0..6f31436
+
+## Commits
+6f31436 fix: sync bun.lock workspace name to music-vote
+
+## Files changed
+ bun.lock | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+## Diff
+diff --git a/bun.lock b/bun.lock
+index 17dacb2..ce4a288 100644
+--- a/bun.lock
++++ b/bun.lock
+@@ -1,16 +1,16 @@
+ {
+   "lockfileVersion": 2,
+   "configVersion": 1,
+   "workspaces": {
+     "": {
+-      "name": "mino-starter",
++      "name": "music-vote",
+       "dependencies": {
+         "@lightpanda/browser": "1.3.2",
+         "@prisma/client": "7",
+         "@tanstack/react-form": "^1.33.5",
+         "@tanstack/react-query": "5.101.4",
+         "@tanstack/react-router": "1.170.18",
+         "@trpc/client": "11.18.0",
+         "@trpc/server": "11.18.0",
+         "@trpc/tanstack-react-query": "11.18.0",
+         "better-auth": "1.7.1",

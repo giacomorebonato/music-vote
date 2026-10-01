@@ -1,0 +1,255 @@
+# Review package: 6f31436..4164c53
+
+## Commits
+4164c53 feat(db): room, poll, vote, pattern-version models
+
+## Files changed
+ backend/db/__tests__/models.test.ts                | 82 ++++++++++++++++++++++
+ .../20261001104935_music_models/migration.sql      | 55 +++++++++++++++
+ prisma/schema.prisma                               | 54 ++++++++++++++
+ shared/schemas/room.ts                             |  8 +++
+ 4 files changed, 199 insertions(+)
+
+## Diff
+diff --git a/backend/db/__tests__/models.test.ts b/backend/db/__tests__/models.test.ts
+new file mode 100644
+index 0000000..f34375c
+--- /dev/null
++++ b/backend/db/__tests__/models.test.ts
+@@ -0,0 +1,82 @@
++import { afterAll, expect, test } from 'bun:test'
++import { execSync } from 'node:child_process'
++import { resolve } from 'node:path'
++import { createRoomSchema } from '@shared/schemas/room'
++import { PrismaBunSqlite } from 'prisma-adapter-bun-sqlite'
++import { PrismaClient } from '../../../prisma/generated/client'
++
++// Unit tests run against a real, migrated SQLite file (prisma/test.db) instead of
++// the dev DB: CI runs `bun run check` without applying migrations to dev.db, so
++// the test applies the committed migrations to test.db itself before connecting.
++const testDbPath = resolve(
++	import.meta.dir,
++	'..',
++	'..',
++	'..',
++	'prisma',
++	'test.db',
++)
++
++execSync('DATABASE_URL=file:./test.db bunx prisma migrate deploy', {
++	stdio: 'pipe',
++})
++
++const prisma = new PrismaClient({
++	adapter: new PrismaBunSqlite({ url: `file:${testDbPath}` }),
++})
++
++const hostEmail = `host-${crypto.randomUUID()}@example.com`
++
++afterAll(async () => {
++	await prisma.user.deleteMany({ where: { email: hostEmail } })
++	await prisma.$disconnect()
++})
++
++test('vote dedup: second vote same token+poll throws P2002', async () => {
++	const host = await prisma.user.create({
++		data: { name: 'Host', email: hostEmail },
++	})
++	const room = await prisma.room.create({
++		data: {
++			hostId: host.id,
++			bpm: 120,
++			lengthSec: 600,
++			pollIntervalSec: 120,
++			genre: 'techno',
++			status: 'lobby',
++			stateDoc: {},
++		},
++	})
++	const poll = await prisma.poll.create({
++		data: {
++			roomId: room.id,
++			seq: 0,
++			kind: 'evolution',
++			question: 'More energy?',
++			options: ['yes', 'no'],
++			status: 'open',
++		},
++	})
++	await prisma.vote.create({
++		data: { pollId: poll.id, sessionToken: 'token-1', choice: 'yes' },
++	})
++
++	let code: string | undefined
++	try {
++		await prisma.vote.create({
++			data: { pollId: poll.id, sessionToken: 'token-1', choice: 'no' },
++		})
++	} catch (error) {
++		code = (error as { code?: string }).code
++	}
++
++	expect(code).toBe('P2002')
++})
++
++test('createRoomSchema rejects bpm 59 and 201', () => {
++	const base = { lengthMin: 10, pollIntervalSec: 120, genre: 'techno' }
++	expect(createRoomSchema.safeParse({ ...base, bpm: 59 }).success).toBe(false)
++	expect(createRoomSchema.safeParse({ ...base, bpm: 201 }).success).toBe(false)
++	expect(createRoomSchema.safeParse({ ...base, bpm: 60 }).success).toBe(true)
++	expect(createRoomSchema.safeParse({ ...base, bpm: 200 }).success).toBe(true)
++})
+diff --git a/prisma/migrations/20261001104935_music_models/migration.sql b/prisma/migrations/20261001104935_music_models/migration.sql
+new file mode 100644
+index 0000000..52a8ddd
+--- /dev/null
++++ b/prisma/migrations/20261001104935_music_models/migration.sql
+@@ -0,0 +1,55 @@
++-- CreateTable
++CREATE TABLE "Room" (
++    "id" TEXT NOT NULL PRIMARY KEY,
++    "hostId" TEXT NOT NULL,
++    "bpm" INTEGER NOT NULL,
++    "lengthSec" INTEGER NOT NULL,
++    "pollIntervalSec" INTEGER NOT NULL,
++    "genre" TEXT NOT NULL,
++    "status" TEXT NOT NULL,
++    "currentCode" TEXT,
++    "stateDoc" JSONB NOT NULL,
++    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
++    CONSTRAINT "Room_hostId_fkey" FOREIGN KEY ("hostId") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE
++);
++
++-- CreateTable
++CREATE TABLE "Poll" (
++    "id" TEXT NOT NULL PRIMARY KEY,
++    "roomId" TEXT NOT NULL,
++    "seq" INTEGER NOT NULL,
++    "kind" TEXT NOT NULL,
++    "question" TEXT NOT NULL,
++    "options" JSONB NOT NULL,
++    "openedAt" DATETIME,
++    "closesAt" DATETIME,
++    "status" TEXT NOT NULL,
++    "winningOption" TEXT,
++    CONSTRAINT "Poll_roomId_fkey" FOREIGN KEY ("roomId") REFERENCES "Room" ("id") ON DELETE CASCADE ON UPDATE CASCADE
++);
++
++-- CreateTable
++CREATE TABLE "Vote" (
++    "id" TEXT NOT NULL PRIMARY KEY,
++    "pollId" TEXT NOT NULL,
++    "sessionToken" TEXT NOT NULL,
++    "choice" TEXT NOT NULL,
++    CONSTRAINT "Vote_pollId_fkey" FOREIGN KEY ("pollId") REFERENCES "Poll" ("id") ON DELETE CASCADE ON UPDATE CASCADE
++);
++
++-- CreateTable
++CREATE TABLE "PatternVersion" (
++    "id" TEXT NOT NULL PRIMARY KEY,
++    "roomId" TEXT NOT NULL,
++    "code" TEXT NOT NULL,
++    "source" TEXT NOT NULL,
++    "status" TEXT NOT NULL,
++    "appliedAt" DATETIME,
++    CONSTRAINT "PatternVersion_roomId_fkey" FOREIGN KEY ("roomId") REFERENCES "Room" ("id") ON DELETE CASCADE ON UPDATE CASCADE
++);
++
++-- CreateIndex
++CREATE UNIQUE INDEX "Poll_roomId_seq_key" ON "Poll"("roomId", "seq");
++
++-- CreateIndex
++CREATE UNIQUE INDEX "Vote_pollId_sessionToken_key" ON "Vote"("pollId", "sessionToken");
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index 3d38c4b..86d70da 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -12,20 +12,74 @@ datasource db {
+ model User {
+   id            String   @id @default(cuid())
+   name          String
+   email         String   @unique
+   emailVerified Boolean  @default(false)
+   image         String?
+   createdAt     DateTime @default(now())
+   updatedAt     DateTime @updatedAt
+   sessions      Session[]
+   accounts      Account[]
++  rooms         Room[]
++}
++
++model Room {
++  id              String           @id @default(cuid())
++  hostId          String
++  host            User             @relation(fields: [hostId], references: [id], onDelete: Cascade)
++  bpm             Int
++  lengthSec       Int
++  pollIntervalSec Int
++  genre           String
++  status          String
++  currentCode     String?
++  stateDoc        Json
++  createdAt       DateTime         @default(now())
++  polls           Poll[]
++  patternVersions PatternVersion[]
++}
++
++model Poll {
++  id            String    @id @default(cuid())
++  roomId        String
++  room          Room      @relation(fields: [roomId], references: [id], onDelete: Cascade)
++  seq           Int
++  kind          String
++  question      String
++  options       Json
++  openedAt      DateTime?
++  closesAt      DateTime?
++  status        String
++  winningOption String?
++  votes         Vote[]
++
++  @@unique([roomId, seq])
++}
++
++model Vote {
++  id           String @id @default(cuid())
++  pollId       String
++  poll         Poll   @relation(fields: [pollId], references: [id], onDelete: Cascade)
++  sessionToken String
++  choice       String
++
++  @@unique([pollId, sessionToken])
++}
++
++model PatternVersion {
++  id        String    @id @default(cuid())
++  roomId    String
++  room      Room      @relation(fields: [roomId], references: [id], onDelete: Cascade)
++  code      String
++  source    String
++  status    String
++  appliedAt DateTime?
+ }
+ 
+ model Session {
+   id        String   @id @default(cuid())
+   expiresAt DateTime
+   token     String   @unique
+   createdAt DateTime @default(now())
+   updatedAt DateTime @updatedAt
+   ipAddress String?
+   userAgent String?
+diff --git a/shared/schemas/room.ts b/shared/schemas/room.ts
+new file mode 100644
+index 0000000..3853ac7
+--- /dev/null
++++ b/shared/schemas/room.ts
+@@ -0,0 +1,8 @@
++import { z } from 'zod'
++
++export const createRoomSchema = z.object({
++	bpm: z.int().min(60).max(200),
++	lengthMin: z.int().min(5).max(60),
++	pollIntervalSec: z.int().min(60).max(600),
++	genre: z.string().min(1).max(80),
++})

@@ -1,0 +1,199 @@
+# Review package: 6d48b88..93591ad
+
+## Commits
+93591ad test(rooms): DI seam + real question-gen atomicity guard
+
+## Files changed
+ backend/rooms/__tests__/service.test.ts | 16 ++++++++++------
+ backend/rooms/service.ts                | 34 ++++++++++++++++++++++++++++-----
+ 2 files changed, 39 insertions(+), 11 deletions(-)
+
+## Diff
+diff --git a/backend/rooms/__tests__/service.test.ts b/backend/rooms/__tests__/service.test.ts
+index e54691b..d7f0d14 100644
+--- a/backend/rooms/__tests__/service.test.ts
++++ b/backend/rooms/__tests__/service.test.ts
+@@ -3,20 +3,21 @@ import {
+ 	beforeAll,
+ 	beforeEach,
+ 	expect,
+ 	jest,
+ 	mock,
+ 	test,
+ } from 'bun:test'
+ import { execSync } from 'node:child_process'
+ import { resolve } from 'node:path'
+ import { MockLlmProvider } from '@backend/llm/provider'
++import { generateInitialPattern, generateOutro } from '@backend/music/engine'
+ import type { Context } from '@backend/trpc/context'
+ import type { WsEvent } from '@shared/realtime/events'
+ import { PrismaBunSqlite } from 'prisma-adapter-bun-sqlite'
+ import { PrismaClient } from '../../../prisma/generated/client'
+ 
+ const testDbPath = resolve(
+ 	import.meta.dir,
+ 	'..',
+ 	'..',
+ 	'..',
+@@ -98,26 +99,29 @@ test('createRoom creates lobby with lengthSec = lengthMin * 60', async () => {
+ 	const room = await service.createRoom(host.id, baseInput())
+ 
+ 	expect(room.status).toBe('lobby')
+ 	expect(room.lengthSec).toBe(600)
+ })
+ 
+ test('startRoom is atomic: question-gen throw leaves room lobby with zero versions', async () => {
+ 	const host = await makeHost()
+ 	const room = await service.createRoom(host.id, baseInput())
+ 
+-	mockProvider = new MockLlmProvider(['s("bd sd cp hh")'])
+-	mockProvider.chat = async () => {
+-		throw new Error('question generation failed')
+-	}
+-
+-	await expect(service.startRoom(room.id, host.id)).rejects.toThrow()
++	await expect(
++		service.startRoom(room.id, host.id, {
++			generateInitialPattern,
++			generateNextQuestion: async () => {
++				throw new Error('question generation failed')
++			},
++			generateOutro,
++		}),
++	).rejects.toThrow('question generation failed')
+ 
+ 	const updated = await prisma.room.findUnique({ where: { id: room.id } })
+ 	expect(updated?.status).toBe('lobby')
+ 	expect(updated?.currentCode).toBeNull()
+ 
+ 	const versions = await prisma.patternVersion.findMany({
+ 		where: { roomId: room.id },
+ 	})
+ 	expect(versions).toHaveLength(0)
+ 
+diff --git a/backend/rooms/service.ts b/backend/rooms/service.ts
+index 41d2461..52a6b55 100644
+--- a/backend/rooms/service.ts
++++ b/backend/rooms/service.ts
+@@ -7,52 +7,68 @@ import {
+ } from '@backend/music/engine'
+ import type { StateDoc } from '@backend/music/state-doc'
+ import { armScheduler } from '@backend/polls/scheduler'
+ import { hub } from '@backend/realtime/hub'
+ import type { createRoomSchema } from '@shared/schemas/room'
+ import type { z } from 'zod'
+ import type { Prisma, Room } from '../../prisma/generated/client'
+ 
+ type CreateRoomInput = z.infer<typeof createRoomSchema>
+ 
++type EngineDeps = {
++	generateInitialPattern: typeof generateInitialPattern
++	generateNextQuestion: typeof generateNextQuestion
++	generateOutro: typeof generateOutro
++}
++
++const defaultEngine: EngineDeps = {
++	generateInitialPattern,
++	generateNextQuestion,
++	generateOutro,
++}
++
+ export async function createRoom(
+ 	hostId: string,
+ 	input: CreateRoomInput,
+ ): Promise<Room> {
+ 	return prisma.room.create({
+ 		data: {
+ 			hostId,
+ 			bpm: input.bpm,
+ 			lengthSec: input.lengthMin * 60,
+ 			pollIntervalSec: input.pollIntervalSec,
+ 			genre: input.genre,
+ 			status: 'lobby',
+ 			stateDoc: {},
+ 		},
+ 	})
+ }
+ 
+-export async function startRoom(roomId: string, hostId: string): Promise<void> {
++export async function startRoom(
++	roomId: string,
++	hostId: string,
++	engine: EngineDeps = defaultEngine,
++): Promise<void> {
+ 	const room = await prisma.room.findUnique({ where: { id: roomId } })
+ 	if (!room || room.hostId !== hostId) {
+ 		throw new Error('Room not found or access denied')
+ 	}
+ 	if (room.status !== 'lobby') {
+ 		throw new Error('Room is not in lobby')
+ 	}
+ 
+ 	const provider = getLlmProvider()
+-	const { code, doc } = await generateInitialPattern(provider, {
++	const { code, doc } = await engine.generateInitialPattern(provider, {
+ 		genre: room.genre,
+ 		bpm: room.bpm,
+ 	})
+-	const question = await generateNextQuestion(provider, doc)
++	const question = await engine.generateNextQuestion(provider, doc)
+ 	const now = new Date()
+ 	const version = await prisma.patternVersion.create({
+ 		data: {
+ 			roomId,
+ 			code,
+ 			source: 'initial',
+ 			status: 'applied',
+ 			appliedAt: now,
+ 		},
+ 	})
+@@ -95,39 +111,47 @@ async function closeOpenPoll(roomId: string): Promise<void> {
+ 
+ async function finalizeRoomEnd(roomId: string): Promise<void> {
+ 	await prisma.room.update({
+ 		where: { id: roomId },
+ 		data: { status: 'ended' },
+ 	})
+ 	hub.publishAudience(roomId, { type: 'room_ended' })
+ 	hub.publishHost(roomId, { type: 'room_status', status: 'ended' })
+ }
+ 
+-export async function endRoom(roomId: string, hostId: string): Promise<void> {
++export async function endRoom(
++	roomId: string,
++	hostId: string,
++	engine: EngineDeps = defaultEngine,
++): Promise<void> {
+ 	const room = await prisma.room.findUnique({ where: { id: roomId } })
+ 	if (!room || room.hostId !== hostId) {
+ 		throw new Error('Room not found or access denied')
+ 	}
+ 	if (room.status === 'ended' || room.status === 'outro') {
+ 		return
+ 	}
+ 
+ 	await closeOpenPoll(roomId)
+ 
+ 	if (room.status === 'lobby') {
+ 		await finalizeRoomEnd(roomId)
+ 		return
+ 	}
+ 
+ 	const provider = getLlmProvider()
+ 	const doc = room.stateDoc as unknown as StateDoc
+-	const outroCode = await generateOutro(provider, doc, room.currentCode ?? '')
++	const outroCode = await engine.generateOutro(
++		provider,
++		doc,
++		room.currentCode ?? '',
++	)
+ 	const version = await prisma.patternVersion.create({
+ 		data: {
+ 			roomId,
+ 			code: outroCode,
+ 			source: 'outro',
+ 			status: 'candidate',
+ 		},
+ 	})
+ 	hub.publishHost(roomId, {
+ 		type: 'code_update',

@@ -1,0 +1,331 @@
+# Review package: a1ca394..0286624
+
+## Commits
+0286624 fix(realtime): prod ws return, single hub instance, prod role resolver tests
+
+## Files changed
+ backend/realtime/__tests__/hub.test.ts | 109 +++++++++++++++++++++------------
+ backend/realtime/hub.ts                |  32 ++++++++++
+ backend/server.ts                      |  31 +++-------
+ 3 files changed, 110 insertions(+), 62 deletions(-)
+
+## Diff
+diff --git a/backend/realtime/__tests__/hub.test.ts b/backend/realtime/__tests__/hub.test.ts
+index 52f56b3..354ed20 100644
+--- a/backend/realtime/__tests__/hub.test.ts
++++ b/backend/realtime/__tests__/hub.test.ts
+@@ -1,15 +1,17 @@
+ import { expect, test } from 'bun:test'
+ import {
++	createProdRoleResolver,
+ 	createRealtimeHub,
+ 	createWsUpgradeHandler,
+ 	type RoleResolver,
++	type SessionLike,
+ 	type SocketData,
+ } from '@backend/realtime/hub'
+ import type { WsEvent } from '@shared/realtime/events'
+ import type { Server } from 'bun'
+ 
+ type TestSetup = {
+ 	server: Server<SocketData>
+ 	hub: ReturnType<typeof createRealtimeHub>
+ }
+ 
+@@ -93,91 +95,122 @@ test('two audience clients receive a published audience event', async () => {
+ 	expect(messages1[0]).toEqual(event)
+ 	expect(messages2).toHaveLength(1)
+ 	expect(messages2[0]).toEqual(event)
+ 
+ 	ws1.close()
+ 	ws2.close()
+ 	await Promise.all([waitForClose(ws1), waitForClose(ws2)])
+ 	server.stop(true)
+ })
+ 
+-test('host event is not delivered to audience clients', async () => {
+-	const resolveRole: RoleResolver = async () => ({ role: 'audience' })
++test('host and audience sockets receive only their channel events', async () => {
++	const resolveRole: RoleResolver = async (req) => {
++		const url = new URL(req.url)
++		return { role: url.searchParams.get('as') === 'host' ? 'host' : 'audience' }
++	}
+ 	const { server, hub } = startServer(resolveRole)
+ 
+-	const ws = openSocket(wsUrl(server, 'room-a'))
+-	const messages = collectMessages(ws)
+-	await waitForOpen(ws)
++	const audienceWs = openSocket(`${wsUrl(server, 'room-a')}&as=audience`)
++	const hostWs = openSocket(`${wsUrl(server, 'room-a')}&as=host`)
++	const audienceMessages = collectMessages(audienceWs)
++	const hostMessages = collectMessages(hostWs)
++	await Promise.all([waitForOpen(audienceWs), waitForOpen(hostWs)])
+ 
+ 	hub.publishAudience('room-a', {
+ 		type: 'poll_opened',
+ 		poll: {
+ 			id: 'poll-1',
+ 			question: 'Add melody?',
+ 			options: ['yes', 'no'],
+ 			closesAt: '2026-10-01T00:00:00.000Z',
+ 		},
+ 	})
+ 	await new Promise((resolve) => setTimeout(resolve, 20))
+-	expect(messages).toHaveLength(1)
++	expect(audienceMessages).toHaveLength(1)
++	expect(hostMessages).toHaveLength(0)
+ 
+ 	hub.publishHost('room-a', {
+ 		type: 'vote_count',
+ 		pollId: 'poll-1',
+ 		yes: 3,
+ 		no: 1,
+ 	})
+ 	await new Promise((resolve) => setTimeout(resolve, 20))
+-	expect(messages).toHaveLength(1)
+-
+-	ws.close()
+-	await waitForClose(ws)
+-	server.stop(true)
+-})
+-
+-test('authenticated non-owner joins audience channel, not host', async () => {
+-	const resolveRole: RoleResolver = async () => ({ role: 'audience' })
+-	const { server, hub } = startServer(resolveRole)
+-
+-	const ws = openSocket(wsUrl(server, 'room-a'))
+-	const messages = collectMessages(ws)
+-	await waitForOpen(ws)
+-
+-	hub.publishAudience('room-a', {
+-		type: 'poll_opened',
+-		poll: {
+-			id: 'poll-1',
+-			question: 'Add melody?',
+-			options: ['yes', 'no'],
+-			closesAt: '2026-10-01T00:00:00.000Z',
+-		},
+-	})
+-	await new Promise((resolve) => setTimeout(resolve, 20))
+-	expect(messages).toHaveLength(1)
+-
+-	hub.publishHost('room-a', {
++	expect(audienceMessages).toHaveLength(1)
++	expect(hostMessages).toHaveLength(1)
++	expect(hostMessages[0]).toEqual({
+ 		type: 'vote_count',
+ 		pollId: 'poll-1',
+ 		yes: 3,
+ 		no: 1,
+ 	})
+-	await new Promise((resolve) => setTimeout(resolve, 20))
+-	expect(messages).toHaveLength(1)
+ 
+-	ws.close()
+-	await waitForClose(ws)
++	audienceWs.close()
++	hostWs.close()
++	await Promise.all([waitForClose(audienceWs), waitForClose(hostWs)])
+ 	server.stop(true)
+ })
+ 
+ test('nonexistent room join is rejected and connection closed', async () => {
+ 	const resolveRole: RoleResolver = async () => ({
+ 		error: new Response('room not found', { status: 404 }),
+ 	})
+ 	const { server } = startServer(resolveRole)
+ 
+ 	const ws = openSocket(wsUrl(server, 'room-a'))
+ 	const closed = waitForClose(ws)
+ 	await closed
+ 	expect(ws.readyState).toBe(WebSocket.CLOSED)
+ 
+ 	server.stop(true)
+ })
++
++test('prod role resolver: owner session becomes host', async () => {
++	const resolveRole = createProdRoleResolver({
++		findRoom: async () => ({ hostId: 'user-1' }),
++		getSession: async () => ({ user: { id: 'user-1' } }) as SessionLike,
++	})
++	const result = await resolveRole(
++		new Request('http://localhost/ws?room=r1'),
++		'r1',
++	)
++	expect(result).toEqual({ role: 'host' })
++})
++
++test('prod role resolver: non-owner session becomes audience', async () => {
++	const resolveRole = createProdRoleResolver({
++		findRoom: async () => ({ hostId: 'user-1' }),
++		getSession: async () => ({ user: { id: 'user-2' } }) as SessionLike,
++	})
++	const result = await resolveRole(
++		new Request('http://localhost/ws?room=r1'),
++		'r1',
++	)
++	expect(result).toEqual({ role: 'audience' })
++})
++
++test('prod role resolver: anonymous session becomes audience', async () => {
++	const resolveRole = createProdRoleResolver({
++		findRoom: async () => ({ hostId: 'user-1' }),
++		getSession: async () => null,
++	})
++	const result = await resolveRole(
++		new Request('http://localhost/ws?room=r1'),
++		'r1',
++	)
++	expect(result).toEqual({ role: 'audience' })
++})
++
++test('prod role resolver: missing room returns 404 error response', async () => {
++	const resolveRole = createProdRoleResolver({
++		findRoom: async () => null,
++		getSession: async () => null,
++	})
++	const result = await resolveRole(
++		new Request('http://localhost/ws?room=r1'),
++		'r1',
++	)
++	expect('error' in result).toBe(true)
++	if ('error' in result) {
++		expect(result.error.status).toBe(404)
++	}
++})
+diff --git a/backend/realtime/hub.ts b/backend/realtime/hub.ts
+index d0bd42a..4f69aea 100644
+--- a/backend/realtime/hub.ts
++++ b/backend/realtime/hub.ts
+@@ -137,12 +137,44 @@ export function createWsUpgradeHandler({
+ 		if (!success) {
+ 			return new Response(JSON.stringify({ error: 'upgrade failed' }), {
+ 				status: 500,
+ 				headers: { 'content-type': 'application/json' },
+ 			})
+ 		}
+ 		return undefined
+ 	}
+ }
+ 
++/** @public */
++export type SessionLike = { user?: { id: string } } | null | undefined
++
++/** @public */
++export type RoomLike = { hostId: string } | null
++
++/** @public */
++export function createProdRoleResolver({
++	getSession,
++	findRoom,
++}: {
++	getSession: (req: Request) => Promise<SessionLike>
++	findRoom: (roomId: string) => Promise<RoomLike>
++}): RoleResolver {
++	return async (req, roomId) => {
++		const room = await findRoom(roomId)
++		if (!room) {
++			return {
++				error: new Response(JSON.stringify({ error: 'room not found' }), {
++					status: 404,
++					headers: { 'content-type': 'application/json' },
++				}),
++			}
++		}
++		const session = await getSession(req)
++		if (session?.user?.id === room.hostId) {
++			return { role: 'host' as ChannelRole }
++		}
++		return { role: 'audience' as ChannelRole }
++	}
++}
++
+ /** @public Convenience singleton used by the production server. */
+ export const hub = createRealtimeHub()
+diff --git a/backend/server.ts b/backend/server.ts
+index 64e6fb1..77aa7d9 100644
+--- a/backend/server.ts
++++ b/backend/server.ts
+@@ -1,51 +1,36 @@
+ import { auth } from '@backend/auth/auth'
+ import { prisma } from '@backend/db/client'
+ import {
+ 	normalizeTrpcRequest,
+ 	TRPC_ENDPOINT,
+ } from '@backend/normalize-trpc-request'
+ import {
+-	type ChannelRole,
+-	createRealtimeHub,
++	createProdRoleResolver,
+ 	createWsUpgradeHandler,
++	hub,
+ 	type RoleResolver,
+ 	type SocketData,
+ } from '@backend/realtime/hub'
+ import { createPrerenderHandler } from '@backend/ssr/prerender'
+ import { createContext } from '@backend/trpc/context'
+ import { appRouter } from '@backend/trpc/root'
+ import { PUBLIC_SSR_PATHS } from '@shared/ssr-paths'
+ import { fetchRequestHandler } from '@trpc/server/adapters/fetch'
+ 
+ const isDev = process.env.NODE_ENV !== 'production'
+ const port = Number(process.env.PORT ?? 3000)
+ 
+-const hub = createRealtimeHub()
+-
+-const resolveRole: RoleResolver = async (req, roomId) => {
+-	const room = await prisma.room.findUnique({ where: { id: roomId } })
+-	if (!room) {
+-		return {
+-			error: new Response(JSON.stringify({ error: 'room not found' }), {
+-				status: 404,
+-				headers: { 'content-type': 'application/json' },
+-			}),
+-		}
+-	}
+-
+-	const session = await auth.api.getSession({ headers: req.headers })
+-	if (session?.user?.id === room.hostId) {
+-		return { role: 'host' as ChannelRole }
+-	}
+-	return { role: 'audience' as ChannelRole }
+-}
++const resolveRole: RoleResolver = createProdRoleResolver({
++	getSession: (req) => auth.api.getSession({ headers: req.headers }),
++	findRoom: (roomId) => prisma.room.findUnique({ where: { id: roomId } }),
++})
+ 
+ const handleWs = createWsUpgradeHandler({ resolveRole })
+ 
+ let devIndex: unknown
+ if (isDev) {
+ 	devIndex = (await import('../frontend/index.html')).default
+ }
+ 
+ async function serveDistFile(pathname: string): Promise<Response | null> {
+ 	if (pathname.includes('..')) return null
+@@ -108,23 +93,21 @@ const httpServer = Bun.serve<SocketData>({
+ 				},
+ 				development: { hmr: true, console: true },
+ 			}
+ 		: {
+ 				development: false,
+ 			}),
+ 	async fetch(req, server) {
+ 		const url = new URL(req.url)
+ 
+ 		if (url.pathname === '/ws') {
+-			const upgraded = await handleWs(req, server)
+-			if (upgraded !== undefined) return upgraded
+-			return new Response(null, { status: 101 })
++			return await handleWs(req, server)
+ 		}
+ 
+ 		// Bot prerender runs first (like the plugin's onRequest hook). Lightpanda's
+ 		// own inner requests self-identify via UA and fall through to the SPA shell.
+ 		if (prerender) {
+ 			const ssrRes = await prerender.handle(req)
+ 			if (ssrRes) return ssrRes
+ 		}
+ 
+ 		if (!isDev) {

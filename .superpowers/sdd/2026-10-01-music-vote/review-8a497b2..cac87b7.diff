@@ -1,0 +1,282 @@
+# Review package: 8a497b2..cac87b7
+
+## Commits
+cac87b7 fix(polls): sustain polling after continue, harden tally guards
+
+## Files changed
+ backend/polls/__tests__/scheduler.test.ts | 115 +++++++++++++++++++++++++++++-
+ backend/polls/scheduler.ts                |  11 ++-
+ 2 files changed, 122 insertions(+), 4 deletions(-)
+
+## Diff
+diff --git a/backend/polls/__tests__/scheduler.test.ts b/backend/polls/__tests__/scheduler.test.ts
+index 5a606e4..38822cb 100644
+--- a/backend/polls/__tests__/scheduler.test.ts
++++ b/backend/polls/__tests__/scheduler.test.ts
+@@ -612,39 +612,68 @@ test('restoreSchedulers arms close timer for non-overdue open poll', async () =>
+ })
+ 
+ test('off-option votes are ignored and do not crash', async () => {
+ 	const host = await makeHost()
+ 	const room = await makeRoom(host.id, { pollIntervalSec: 10 })
+ 	const poll = await makePoll(room.id, 1)
+ 
+ 	scheduler.armScheduler(room.id)
+ 	await fakeClock.tick(0)
+ 
+-	await vote(poll.id, 'yes', 'v1')
++	await vote(poll.id, 'invalid-choice', 'v1')
+ 	await vote(poll.id, 'invalid-choice', 'v2')
+-	await vote(poll.id, 'no', 'v3')
+-	await vote(poll.id, 'yes', 'v4')
++	await vote(poll.id, 'yes', 'v3')
+ 
+ 	await fakeClock.tick(5000)
+ 
+ 	const closed = await prisma.poll.findUnique({ where: { id: poll.id } })
+ 	expect(closed?.status).toBe('closed')
+ 	expect(closed?.winningOption).toBe('yes')
+ 
+ 	const versions = await prisma.patternVersion.findMany({
+ 		where: { roomId: room.id },
+ 	})
+ 	expect(versions).toHaveLength(1)
+ 
+ 	scheduler.disarmScheduler(room.id)
+ })
+ 
++test('all-off-option votes close with null winner and no version', async () => {
++	const host = await makeHost()
++	const room = await makeRoom(host.id, { pollIntervalSec: 10 })
++	const poll = await makePoll(room.id, 1)
++
++	scheduler.armScheduler(room.id)
++	await fakeClock.tick(0)
++
++	await vote(poll.id, 'invalid-choice', 'v1')
++	await vote(poll.id, 'other-invalid', 'v2')
++
++	await fakeClock.tick(5000)
++
++	const closed = await prisma.poll.findUnique({ where: { id: poll.id } })
++	expect(closed?.status).toBe('closed')
++	expect(closed?.winningOption).toBeNull()
++
++	const versions = await prisma.patternVersion.findMany({
++		where: { roomId: room.id },
++	})
++	expect(versions).toHaveLength(0)
++
++	const queued = await prisma.poll.findMany({
++		where: { roomId: room.id, status: 'queued' },
++	})
++	expect(queued).toHaveLength(1)
++
++	scheduler.disarmScheduler(room.id)
++})
++
+ test('end poll continue queues next evolution and keeps room live', async () => {
+ 	const host = await makeHost()
+ 	const room = await makeRoom(host.id, {
+ 		lengthSec: 120,
+ 		pollIntervalSec: 20,
+ 	})
+ 	const poll = await prisma.poll.create({
+ 		data: {
+ 			roomId: room.id,
+ 			seq: 1,
+@@ -684,10 +713,90 @@ test('end poll continue queues next evolution and keeps room live', async () =>
+ 	})
+ 	expect(nextEvolution).toBeDefined()
+ 
+ 	const outroStarted = hostEvents().some(
+ 		(e) => e[1].type === 'code_update' && e[1].kind === 'outro',
+ 	)
+ 	expect(outroStarted).toBe(false)
+ 
+ 	scheduler.disarmScheduler(room.id)
+ })
++
++test('end poll continue sustains polling for remaining time', async () => {
++	const host = await makeHost()
++	const room = await makeRoom(host.id, {
++		lengthSec: 120,
++		pollIntervalSec: 20,
++	})
++	const endPoll = await prisma.poll.create({
++		data: {
++			roomId: room.id,
++			seq: 1,
++			kind: 'end',
++			question: 'End the set?',
++			options: [
++				{ key: 'wrap', label: 'Wrap it up' },
++				{ key: 'continue', label: 'Keep going' },
++			],
++			status: 'queued',
++		},
++	})
++
++	scheduler.armScheduler(room.id)
++	await fakeClock.tick(0)
++
++	await vote(endPoll.id, 'continue', 'v1')
++	await fakeClock.tick(5000)
++
++	// After continue, an evolution poll should be queued and opened immediately
++	let queued = await prisma.poll.findMany({
++		where: {
++			roomId: room.id,
++			kind: 'evolution',
++			status: { in: ['queued', 'open'] },
++		},
++	})
++	expect(queued).toHaveLength(1)
++
++	// First post-continue evolution poll lifecycle
++	const evo1 = queued[0]
++	await vote(evo1.id, 'yes', 'v2')
++	await fakeClock.tick(20000) // open evo1 then close it at +5s; queues evo2 around +20s
++
++	const stillLive = await prisma.room.findUnique({ where: { id: room.id } })
++	expect(stillLive?.status).toBe('live')
++
++	queued = await prisma.poll.findMany({
++		where: {
++			roomId: room.id,
++			kind: 'evolution',
++			status: { in: ['queued', 'open'] },
++		},
++	})
++	expect(queued).toHaveLength(1)
++	const evo2 = queued[0]
++	expect(evo2.seq).toBeGreaterThan(evo1.seq)
++
++	await vote(evo2.id, 'yes', 'v3')
++	await fakeClock.tick(20000)
++
++	queued = await prisma.poll.findMany({
++		where: {
++			roomId: room.id,
++			kind: 'evolution',
++			status: { in: ['queued', 'open'] },
++		},
++	})
++	expect(queued).toHaveLength(1)
++
++	const outroStarted = hostEvents().some(
++		(e) => e[1].type === 'code_update' && e[1].kind === 'outro',
++	)
++	expect(outroStarted).toBe(false)
++
++	const endPolls = await prisma.poll.findMany({
++		where: { roomId: room.id, kind: 'end' },
++	})
++	expect(endPolls).toHaveLength(1)
++
++	scheduler.disarmScheduler(room.id)
++})
+diff --git a/backend/polls/scheduler.ts b/backend/polls/scheduler.ts
+index 9ecd6cf..62206ee 100644
+--- a/backend/polls/scheduler.ts
++++ b/backend/polls/scheduler.ts
+@@ -45,20 +45,21 @@ type PollOption = {
+ }
+ 
+ type RoomScheduler = {
+ 	roomId: string
+ 	bootHandle?: unknown
+ 	endHandle?: unknown
+ 	endPollHandle?: unknown
+ 	intervalHandle?: unknown
+ 	pollCloseHandle?: unknown
+ 	outroHandle?: unknown
++	continuing?: boolean
+ }
+ 
+ const active = new Map<string, RoomScheduler>()
+ 
+ export function disarmScheduler(roomId: string): void {
+ 	const scheduler = active.get(roomId)
+ 	if (!scheduler) return
+ 	for (const key of [
+ 		'bootHandle',
+ 		'endHandle',
+@@ -327,20 +328,22 @@ async function closePoll(pollId: string, roomId: string): Promise<void> {
+ 		type: 'poll_closed',
+ 		pollId: poll.id,
+ 		winningOption: winner,
+ 	})
+ 
+ 	if (winner) {
+ 		if (poll.kind === 'end') {
+ 			if (winner === 'wrap') {
+ 				await triggerEndRoom(roomId, room.hostId)
+ 			} else if (winner === 'continue') {
++				const current = active.get(roomId)
++				if (current) current.continuing = true
+ 				await queueNextEvolution(roomId, room, { afterContinue: true })
+ 				await openNextQueuedPoll(roomId)
+ 			}
+ 		} else if (poll.kind === 'evolution') {
+ 			await runEvolution(room, poll, winner)
+ 		}
+ 	}
+ 
+ 	if (poll.kind === 'evolution') {
+ 		await queueNextEvolution(roomId, room)
+@@ -422,20 +425,26 @@ async function queueNextEvolution(
+ 	if (existingEnd) return
+ 
+ 	const now = clock.now()
+ 	const insertAt = room.createdAt.getTime() + room.lengthSec * 750
+ 	const intervalMs = Math.max(room.pollIntervalSec, MIN_INTERVAL_SECS) * 1000
+ 	if (!opts?.afterContinue) {
+ 		if (now >= insertAt) return
+ 		if (now + intervalMs >= insertAt) return
+ 	}
+ 
++	const scheduler = active.get(roomId)
++	if (scheduler?.continuing && now >= insertAt) {
++		const endAt = room.createdAt.getTime() + room.lengthSec * 1000
++		if (now + intervalMs >= endAt) return
++	}
++
+ 	const last = await prisma.poll.findFirst({
+ 		where: { roomId },
+ 		orderBy: { seq: 'desc' },
+ 	})
+ 	const seq = (last?.seq ?? 0) + 1
+ 	const provider = getLlmProvider()
+ 	const question = await generateNextQuestion(
+ 		provider,
+ 		room.stateDoc as unknown as StateDoc,
+ 	)
+@@ -525,26 +534,26 @@ function tallyVotes(
+ 		}
+ 	}
+ 	return counts
+ }
+ 
+ function pickWinner(
+ 	options: PollOption[],
+ 	votes: { choice: string }[],
+ 	pollId: string,
+ ): string | null {
+-	if (votes.length === 0) return null
+ 	const counts = tallyVotes(votes, options)
+ 	let max = -1
+ 	for (const count of counts.values()) {
+ 		if (count > max) max = count
+ 	}
++	if (max === 0) return null
+ 	const tied = options.filter((option) => counts.get(option.key) === max)
+ 	if (tied.length === 1) return tied[0].key
+ 	const seed = hashStringToSeed(pollId)
+ 	// biome-ignore lint/suspicious/noConsole: spec requires tie-break seed logged
+ 	console.info(`tie-break seed=${seed} for poll ${pollId}`)
+ 	return tied[seededRandomInt(seed, tied.length)].key
+ }
+ 
+ function hashStringToSeed(input: string): number {
+ 	let hash = 0

@@ -1,0 +1,635 @@
+# Review package: e2a58e9..ce7e6b0
+
+## Commits
+ce7e6b0 feat(vote): anonymous vote page — poll, countdown, ended summary
+
+## Files changed
+ frontend/components/__tests__/poll-card.test.tsx |  88 ++++++++
+ frontend/components/poll-card.tsx                | 132 ++++++++++++
+ frontend/router.tsx                              |  13 ++
+ frontend/routes/__tests__/vote-view.test.tsx     |  69 +++++++
+ frontend/routes/vote.tsx                         | 250 +++++++++++++++++++++++
+ 5 files changed, 552 insertions(+)
+
+## Diff
+diff --git a/frontend/components/__tests__/poll-card.test.tsx b/frontend/components/__tests__/poll-card.test.tsx
+new file mode 100644
+index 0000000..030c0ae
+--- /dev/null
++++ b/frontend/components/__tests__/poll-card.test.tsx
+@@ -0,0 +1,88 @@
++import { expect, test } from 'bun:test'
++import {
++	formatCountdown,
++	PollCard,
++	PollTimeline,
++} from '@frontend/components/poll-card'
++import { renderToStaticMarkup } from 'react-dom/server'
++
++const noop = () => {}
++
++function countDisabled(markup: string): number {
++	return markup.match(/disabled=""/g)?.length ?? 0
++}
++
++test('renders the question and one button per option, never hardcoding yes/no', () => {
++	const markup = renderToStaticMarkup(
++		<PollCard
++			question="End the set?"
++			options={[
++				{ key: 'wrap', label: 'Wrap it up' },
++				{ key: 'continue', label: 'Keep going' },
++			]}
++			selectedKey={null}
++			voted={false}
++			countdownSeconds={75}
++			pending={false}
++			onVote={noop}
++		/>,
++	)
++
++	expect(markup).toContain('End the set?')
++	expect(markup).toContain('Wrap it up')
++	expect(markup).toContain('Keep going')
++	expect(markup).toContain('data-testid="vote-option-wrap"')
++	expect(markup).toContain('data-testid="vote-option-continue"')
++	expect(markup).toContain('1:15')
++	expect(markup).not.toContain('data-testid="vote-counted"')
++	expect(countDisabled(markup)).toBe(0)
++})
++
++test('disables the buttons and shows "Vote counted" after voting', () => {
++	const markup = renderToStaticMarkup(
++		<PollCard
++			question="More energy?"
++			options={[
++				{ key: 'yes', label: 'Yes' },
++				{ key: 'no', label: 'No' },
++			]}
++			selectedKey="yes"
++			voted={true}
++			countdownSeconds={10}
++			pending={false}
++			onVote={noop}
++		/>,
++	)
++
++	expect(markup).toContain('data-testid="vote-counted"')
++	expect(markup).toContain('Vote counted')
++	// Both option buttons are disabled once the vote is recorded.
++	expect(countDisabled(markup)).toBe(2)
++})
++
++test('formats the countdown as m:ss, clamped at zero', () => {
++	expect(formatCountdown(75)).toBe('1:15')
++	expect(formatCountdown(5)).toBe('0:05')
++	expect(formatCountdown(0)).toBe('0:00')
++	expect(formatCountdown(-3)).toBe('0:00')
++	expect(formatCountdown(125)).toBe('2:05')
++})
++
++test('ended timeline lists only decided polls', () => {
++	const markup = renderToStaticMarkup(
++		<PollTimeline
++			polls={[
++				{ question: 'More energy?', winningOption: 'yes', applied: true },
++				{ question: 'Zero votes?', winningOption: null, applied: false },
++				{ question: 'End the set?', winningOption: 'continue', applied: false },
++			]}
++		/>,
++	)
++
++	expect(markup).toContain('Set summary')
++	expect(markup).toContain('More energy?')
++	expect(markup).toContain('End the set?')
++	expect(markup).toContain('yes')
++	expect(markup).toContain('continue')
++	expect(markup).not.toContain('Zero votes?')
++})
+diff --git a/frontend/components/poll-card.tsx b/frontend/components/poll-card.tsx
+new file mode 100644
+index 0000000..7366d5d
+--- /dev/null
++++ b/frontend/components/poll-card.tsx
+@@ -0,0 +1,132 @@
++export type PollOption = { key: string; label: string }
++
++export type PollCardPoll = {
++	id: string
++	question: string
++	options: PollOption[]
++	closesAt: string | null
++}
++
++export type SummaryPoll = {
++	question: string
++	winningOption: string | null
++	applied: boolean
++}
++
++/** Seconds remaining rendered as `m:ss`, clamped at zero. */
++export function formatCountdown(totalSeconds: number): string {
++	const clamped = Math.max(0, Math.floor(totalSeconds))
++	const minutes = Math.floor(clamped / 60)
++	const seconds = clamped % 60
++	return `${minutes}:${String(seconds).padStart(2, '0')}`
++}
++
++/**
++ * The single poll a phone shows at a time. Buttons are rendered from the
++ * poll's own option keys — evolution polls use yes/no, the end poll uses
++ * wrap/continue — so nothing here hardcodes option names.
++ *
++ * Fully prop-driven: the parent owns the vote outcome, which keeps both the
++ * pre-vote and voted states directly renderable in a static test.
++ */
++export function PollCard({
++	question,
++	options,
++	selectedKey,
++	voted,
++	countdownSeconds,
++	pending,
++	onVote,
++}: {
++	question: string
++	options: PollOption[]
++	selectedKey: string | null
++	voted: boolean
++	countdownSeconds: number | null
++	pending: boolean
++	onVote: (choice: string) => void
++}) {
++	return (
++		<div className="card bg-base-100 shadow-xl" data-testid="poll-card">
++			<div className="card-body gap-4">
++				<div className="flex items-center justify-between">
++					<span className="eyebrow">vote now</span>
++					{countdownSeconds === null ? null : (
++						<span className="badge badge-neutral" data-testid="poll-countdown">
++							{formatCountdown(countdownSeconds)}
++						</span>
++					)}
++				</div>
++				<h2 className="font-bold text-xl" data-testid="poll-question">
++					{question}
++				</h2>
++				<div className="flex flex-col gap-3">
++					{options.map((option) => (
++						<button
++							key={option.key}
++							type="button"
++							className={`btn btn-lg ${
++								selectedKey === option.key ? 'btn-success' : 'btn-primary'
++							}`}
++							data-testid={`vote-option-${option.key}`}
++							disabled={voted || pending}
++							onClick={() => onVote(option.key)}
++						>
++							{option.label}
++						</button>
++					))}
++				</div>
++				{voted ? (
++					<div className="alert alert-success" data-testid="vote-counted">
++						<span>Vote counted</span>
++					</div>
++				) : null}
++			</div>
++		</div>
++	)
++}
++
++/**
++ * Ended screen: the timeline of every poll that actually shaped the set.
++ *
++ * `voting.summary` returns a superset — queued/open polls and polls whose
++ * `winningOption` is null (zero votes or a tie) never changed the music, so
++ * they are filtered out here rather than rendered.
++ */
++export function PollTimeline({ polls }: { polls: SummaryPoll[] }) {
++	const decided = polls.filter((poll) => poll.winningOption !== null)
++
++	return (
++		<div className="flex flex-col gap-4" data-testid="poll-timeline">
++			<h2 className="font-bold text-2xl">Set summary</h2>
++			{decided.length === 0 ? (
++				<p className="opacity-70" data-testid="timeline-empty">
++					No polls were decided.
++				</p>
++			) : (
++				<ol className="flex flex-col gap-3">
++					{decided.map((poll) => (
++						<li
++							key={`${poll.question}|${poll.winningOption}|${poll.applied}`}
++							className="card bg-base-200"
++							data-testid="timeline-item"
++						>
++							<div className="card-body gap-1">
++								<span className="text-sm opacity-70">poll</span>
++								<span className="font-medium">{poll.question}</span>
++								<div className="flex items-center gap-2">
++									<span className="badge badge-primary">
++										{poll.winningOption}
++									</span>
++									{poll.applied ? (
++										<span className="text-xs opacity-70">music changed</span>
++									) : null}
++								</div>
++							</div>
++						</li>
++					))}
++				</ol>
++			)}
++		</div>
++	)
++}
+diff --git a/frontend/router.tsx b/frontend/router.tsx
+index d82a3df..53424fd 100644
+--- a/frontend/router.tsx
++++ b/frontend/router.tsx
+@@ -1,14 +1,15 @@
+ import { CreateRoute } from '@frontend/routes/create'
+ import { HomeRoute } from '@frontend/routes/home'
+ import { HostRoute } from '@frontend/routes/host'
+ import { LoginRoute } from '@frontend/routes/login'
++import { VoteRoute } from '@frontend/routes/vote'
+ import {
+ 	createRootRoute,
+ 	createRoute,
+ 	createRouter,
+ 	Outlet,
+ 	RouterProvider,
+ } from '@tanstack/react-router'
+ 
+ const rootRoute = createRootRoute({
+ 	component: () => <Outlet />,
+@@ -36,25 +37,37 @@ const hostRoute = createRoute({
+ 	getParentRoute: () => rootRoute,
+ 	path: '/r/$id/host',
+ 	component: HostRouteContainer,
+ })
+ 
+ function HostRouteContainer() {
+ 	const { id } = hostRoute.useParams()
+ 	return <HostRoute roomId={id} />
+ }
+ 
++const voteRoute = createRoute({
++	getParentRoute: () => rootRoute,
++	path: '/r/$id',
++	component: VoteRouteContainer,
++})
++
++function VoteRouteContainer() {
++	const { id } = voteRoute.useParams()
++	return <VoteRoute roomId={id} />
++}
++
+ const routeTree = rootRoute.addChildren([
+ 	homeRoute,
+ 	loginRoute,
+ 	createRoomRoute,
+ 	hostRoute,
++	voteRoute,
+ ])
+ 
+ export const router = createRouter({ routeTree, defaultPreload: 'intent' })
+ 
+ declare module '@tanstack/react-router' {
+ 	interface Register {
+ 		router: typeof router
+ 	}
+ }
+ 
+diff --git a/frontend/routes/__tests__/vote-view.test.tsx b/frontend/routes/__tests__/vote-view.test.tsx
+new file mode 100644
+index 0000000..7d2b46a
+--- /dev/null
++++ b/frontend/routes/__tests__/vote-view.test.tsx
+@@ -0,0 +1,69 @@
++import { expect, test } from 'bun:test'
++import { VoteView } from '@frontend/routes/vote'
++import { renderToStaticMarkup } from 'react-dom/server'
++
++const noop = () => {}
++
++const baseProps = {
++	poll: null,
++	selection: null,
++	countdownSeconds: null,
++	pending: false,
++	error: null,
++	loadError: null,
++	summaryPolls: null,
++	onVote: noop,
++}
++
++test('lobby shows the waiting-for-the-DJ copy', () => {
++	const markup = renderToStaticMarkup(
++		<VoteView {...baseProps} roomStatus="lobby" />,
++	)
++	expect(markup).toContain('Waiting for the DJ')
++	expect(markup).not.toContain('data-testid="poll-card"')
++})
++
++test('ended renders the summary timeline, filtering undecided polls', () => {
++	const markup = renderToStaticMarkup(
++		<VoteView
++			{...baseProps}
++			roomStatus="ended"
++			summaryPolls={[
++				{ question: 'More energy?', winningOption: 'yes', applied: true },
++				{ question: 'Undecided?', winningOption: null, applied: false },
++			]}
++		/>,
++	)
++	expect(markup).toContain('Set summary')
++	expect(markup).toContain('More energy?')
++	expect(markup).not.toContain('Undecided?')
++})
++
++test('live with an open poll renders the vote card', () => {
++	const markup = renderToStaticMarkup(
++		<VoteView
++			{...baseProps}
++			roomStatus="live"
++			poll={{
++				id: 'poll-1',
++				question: 'More energy?',
++				options: [
++					{ key: 'yes', label: 'Yes' },
++					{ key: 'no', label: 'No' },
++				],
++				closesAt: '2026-10-01T00:00:00.000Z',
++			}}
++			countdownSeconds={42}
++		/>,
++	)
++	expect(markup).toContain('data-testid="poll-card"')
++	expect(markup).toContain('More energy?')
++	expect(markup).toContain('0:42')
++})
++
++test('live with no open poll shows the next-poll wait', () => {
++	const markup = renderToStaticMarkup(
++		<VoteView {...baseProps} roomStatus="live" />,
++	)
++	expect(markup).toContain('Waiting for the next poll')
++})
+diff --git a/frontend/routes/vote.tsx b/frontend/routes/vote.tsx
+new file mode 100644
+index 0000000..de9bb92
+--- /dev/null
++++ b/frontend/routes/vote.tsx
+@@ -0,0 +1,250 @@
++import type { PollCardPoll, SummaryPoll } from '@frontend/components/poll-card'
++import { PollCard, PollTimeline } from '@frontend/components/poll-card'
++import { useRoomChannel } from '@frontend/lib/room-ws'
++import { useTRPC } from '@frontend/lib/trpc'
++import type { WsEvent } from '@shared/realtime/events'
++import { useMutation, useQuery } from '@tanstack/react-query'
++import type { ReactNode } from 'react'
++import { useCallback, useEffect, useRef, useState } from 'react'
++
++type VoteSelection = { pollId: string; choice: string | null }
++
++type VoteViewProps = {
++	roomStatus: string | null
++	poll: PollCardPoll | null
++	selection: VoteSelection | null
++	countdownSeconds: number | null
++	pending: boolean
++	error: string | null
++	loadError: string | null
++	summaryPolls: SummaryPoll[] | null
++	onVote: (choice: string) => void
++}
++
++/** Anonymous vote page reached by scanning the host's QR code. */
++export function VoteRoute({ roomId }: { roomId: string }) {
++	const trpc = useTRPC()
++	const pollQuery = useQuery(trpc.voting.currentPoll.queryOptions({ roomId }))
++	const refetchPoll = pollQuery.refetch
++	const roomStatus = pollQuery.data?.roomStatus ?? null
++	const poll = pollQuery.data?.poll ?? null
++	const ended = roomStatus === 'ended'
++
++	const summaryQuery = useQuery({
++		...trpc.voting.summary.queryOptions({ roomId }),
++		enabled: ended,
++	})
++
++	const claimSession = useMutation(trpc.voting.claimSession.mutationOptions())
++	const castVote = useMutation(trpc.voting.castVote.mutationOptions())
++
++	const [selection, setSelection] = useState<VoteSelection | null>(null)
++	const [error, setError] = useState<string | null>(null)
++	const [nowMs, setNowMs] = useState(() => Date.now())
++
++	const claimRef = useRef<Promise<unknown> | null>(null)
++	const reconciledRef = useRef<string | null>(null)
++
++	// Anonymous session: claim the mv_session cookie once. handleVote awaits
++	// this promise so a fast tap cannot outrun the cookie set.
++	useEffect(() => {
++		if (claimRef.current) return
++		claimRef.current = claimSession.mutateAsync()
++	}, [claimSession])
++
++	// One ticker drives every countdown; cleared on unmount so navigating away
++	// cannot leak an interval.
++	useEffect(() => {
++		const handle = setInterval(() => setNowMs(Date.now()), 1000)
++		return () => clearInterval(handle)
++	}, [])
++
++	const reconcile = useCallback(() => {
++		void refetchPoll()
++	}, [refetchPoll])
++
++	const handleEvent = useCallback(
++		(event: WsEvent) => {
++			switch (event.type) {
++				// The payload carries option labels only (no keys) and no tally, so a
++				// refetch of currentPoll is the source of truth after any lifecycle
++				// change or room end.
++				case 'poll_opened':
++				case 'poll_closed':
++				case 'room_ended':
++					reconcile()
++					break
++				default:
++					break
++			}
++		},
++		[reconcile],
++	)
++
++	// A reconnect may have missed poll lifecycle while the socket was down, so
++	// resync unconditionally.
++	useRoomChannel(roomId, { onEvent: handleEvent, onReconnect: reconcile })
++
++	const closesAtMs = poll?.closesAt ? Date.parse(poll.closesAt) : null
++	const hasDeadline = closesAtMs !== null && !Number.isNaN(closesAtMs)
++	const pollExpired = hasDeadline && nowMs >= closesAtMs
++	// A host `skip` publishes no poll_closed to the audience, and currentPoll can
++	// return an open poll already past closesAt. Treat an expired poll as gone and
++	// refetch once per poll id so the phone never sits on a dead poll.
++	const activePoll = pollExpired ? null : poll
++
++	useEffect(() => {
++		if (!pollExpired || poll === null) return
++		if (reconciledRef.current === poll.id) return
++		reconciledRef.current = poll.id
++		reconcile()
++	}, [pollExpired, poll, reconcile])
++
++	const handleVote = useCallback(
++		async (choice: string) => {
++			if (!activePoll) return
++			setError(null)
++			try {
++				// The mount effect starts the claim; awaiting it closes the window where a
++				// fast tap could beat the mv_session cookie.
++				await (claimRef.current ?? Promise.resolve())
++				await castVote.mutateAsync({ pollId: activePoll.id, choice })
++				setSelection({ pollId: activePoll.id, choice })
++			} catch (cause) {
++				const message = cause instanceof Error ? cause.message : 'Vote failed'
++				if (message.includes('ALREADY_VOTED')) {
++					// This phone already voted on this poll and cannot re-vote (the
++					// server keeps no per-phone choice to re-highlight). Show counted.
++					setSelection({ pollId: activePoll.id, choice: null })
++					return
++				}
++				setError(message)
++				// POLL_CLOSED / stale poll: refetch instead of trusting the dead poll.
++				reconcile()
++			}
++		},
++		[activePoll, castVote, reconcile],
++	)
++
++	const selectionForPoll =
++		selection && activePoll && selection.pollId === activePoll.id
++			? selection
++			: null
++	const countdownSeconds = hasDeadline
++		? Math.max(0, Math.ceil((closesAtMs - nowMs) / 1000))
++		: null
++
++	return (
++		<VoteView
++			roomStatus={roomStatus}
++			poll={activePoll}
++			selection={selectionForPoll}
++			countdownSeconds={activePoll ? countdownSeconds : null}
++			pending={castVote.isPending}
++			error={error}
++			loadError={pollQuery.error?.message ?? null}
++			summaryPolls={ended ? (summaryQuery.data?.polls ?? []) : null}
++			onVote={(choice) => {
++				void handleVote(choice)
++			}}
++		/>
++	)
++}
++
++/**
++ * Presentational page body. Kept separate from the data wiring so lobby /
++ * waiting / poll / ended states render directly from props.
++ */
++export function VoteView({
++	roomStatus,
++	poll,
++	selection,
++	countdownSeconds,
++	pending,
++	error,
++	loadError,
++	summaryPolls,
++	onVote,
++}: VoteViewProps) {
++	let body: ReactNode
++	if (roomStatus === null) {
++		body = <span className="loading loading-spinner mx-auto" />
++	} else if (roomStatus === 'lobby') {
++		body = (
++			<WaitingStage
++				testId="waiting-dj"
++				title="Waiting for the DJ"
++				detail="The set hasn't started yet — keep this page open."
++			/>
++		)
++	} else if (roomStatus === 'ended') {
++		body = <PollTimeline polls={summaryPolls ?? []} />
++	} else if (roomStatus === 'outro') {
++		body = (
++			<WaitingStage
++				testId="waiting-outro"
++				title="Wrapping up"
++				detail="The set is ending — no more votes."
++			/>
++		)
++	} else if (poll) {
++		body = (
++			<PollCard
++				question={poll.question}
++				options={poll.options}
++				selectedKey={selection?.choice ?? null}
++				voted={selection !== null}
++				countdownSeconds={countdownSeconds}
++				pending={pending}
++				onVote={onVote}
++			/>
++		)
++	} else {
++		body = (
++			<WaitingStage
++				testId="waiting-poll"
++				title="Waiting for the next poll"
++				detail="A new question is coming up — vote when it appears."
++			/>
++		)
++	}
++
++	return (
++		<div className="mx-auto flex min-h-screen w-full max-w-md flex-col justify-center gap-6 px-4 py-10">
++			<header className="flex flex-col items-center gap-1">
++				<span className="eyebrow">music vote</span>
++			</header>
++			{loadError ? (
++				<div className="alert alert-error" data-testid="vote-error">
++					<span>{loadError}</span>
++				</div>
++			) : null}
++			{error ? (
++				<div className="alert alert-warning" data-testid="vote-error">
++					<span>{error}</span>
++				</div>
++			) : null}
++			{body}
++		</div>
++	)
++}
++
++function WaitingStage({
++	testId,
++	title,
++	detail,
++}: {
++	testId: string
++	title: string
++	detail: string
++}) {
++	return (
++		<div className="card bg-base-100 shadow-xl" data-testid={testId}>
++			<div className="card-body items-center gap-2 text-center">
++				<h2 className="font-bold text-xl">{title}</h2>
++				<p className="text-sm opacity-70">{detail}</p>
++				<span className="loading loading-dots" />
++			</div>
++		</div>
++	)
++}

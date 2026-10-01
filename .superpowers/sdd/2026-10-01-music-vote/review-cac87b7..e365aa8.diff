@@ -1,0 +1,177 @@
+# Review package: cac87b7..e365aa8
+
+## Commits
+e365aa8 fix(polls): make continuing relaxation reachable, discriminating sustain test
+
+## Files changed
+ backend/polls/__tests__/scheduler.test.ts | 21 ++++++++++++++-------
+ backend/polls/scheduler.ts                | 11 +++++------
+ 2 files changed, 19 insertions(+), 13 deletions(-)
+
+## Diff
+diff --git a/backend/polls/__tests__/scheduler.test.ts b/backend/polls/__tests__/scheduler.test.ts
+index 38822cb..1000c8e 100644
+--- a/backend/polls/__tests__/scheduler.test.ts
++++ b/backend/polls/__tests__/scheduler.test.ts
+@@ -714,86 +714,93 @@ test('end poll continue queues next evolution and keeps room live', async () =>
+ 	expect(nextEvolution).toBeDefined()
+ 
+ 	const outroStarted = hostEvents().some(
+ 		(e) => e[1].type === 'code_update' && e[1].kind === 'outro',
+ 	)
+ 	expect(outroStarted).toBe(false)
+ 
+ 	scheduler.disarmScheduler(room.id)
+ })
+ 
+-test('end poll continue sustains polling for remaining time', async () => {
++test('end poll continue sustains polling past insertAt', async () => {
+ 	const host = await makeHost()
+ 	const room = await makeRoom(host.id, {
+ 		lengthSec: 120,
+-		pollIntervalSec: 20,
++		pollIntervalSec: 5,
+ 	})
+ 	const endPoll = await prisma.poll.create({
+ 		data: {
+ 			roomId: room.id,
+ 			seq: 1,
+ 			kind: 'end',
+ 			question: 'End the set?',
+ 			options: [
+ 				{ key: 'wrap', label: 'Wrap it up' },
+ 				{ key: 'continue', label: 'Keep going' },
+ 			],
+ 			status: 'queued',
+ 		},
+ 	})
+ 
+ 	scheduler.armScheduler(room.id)
+ 	await fakeClock.tick(0)
+ 
+ 	await vote(endPoll.id, 'continue', 'v1')
++	// close end poll at t=5s, queue evo2, open it immediately
+ 	await fakeClock.tick(5000)
+ 
+-	// After continue, an evolution poll should be queued and opened immediately
+ 	let queued = await prisma.poll.findMany({
+ 		where: {
+ 			roomId: room.id,
+ 			kind: 'evolution',
+ 			status: { in: ['queued', 'open'] },
+ 		},
+ 	})
+ 	expect(queued).toHaveLength(1)
+ 
+-	// First post-continue evolution poll lifecycle
++	// Advance to t=95s (past insertAt=90s). Close first post-continue evolution,
++	// then let interval tick queue and open the next one.
+ 	const evo1 = queued[0]
+ 	await vote(evo1.id, 'yes', 'v2')
+-	await fakeClock.tick(20000) // open evo1 then close it at +5s; queues evo2 around +20s
++	await fakeClock.tick(90000)
+ 
+-	const stillLive = await prisma.room.findUnique({ where: { id: room.id } })
++	let stillLive = await prisma.room.findUnique({ where: { id: room.id } })
+ 	expect(stillLive?.status).toBe('live')
+ 
+ 	queued = await prisma.poll.findMany({
+ 		where: {
+ 			roomId: room.id,
+ 			kind: 'evolution',
+ 			status: { in: ['queued', 'open'] },
+ 		},
+ 	})
+ 	expect(queued).toHaveLength(1)
+ 	const evo2 = queued[0]
+ 	expect(evo2.seq).toBeGreaterThan(evo1.seq)
+ 
++	// Advance to t=100s, drive one more complete post-insertAt cycle.
+ 	await vote(evo2.id, 'yes', 'v3')
+-	await fakeClock.tick(20000)
++	await fakeClock.tick(5000)
++
++	stillLive = await prisma.room.findUnique({ where: { id: room.id } })
++	expect(stillLive?.status).toBe('live')
+ 
+ 	queued = await prisma.poll.findMany({
+ 		where: {
+ 			roomId: room.id,
+ 			kind: 'evolution',
+ 			status: { in: ['queued', 'open'] },
+ 		},
+ 	})
+ 	expect(queued).toHaveLength(1)
++	const evo3 = queued[0]
++	expect(evo3.seq).toBeGreaterThan(evo2.seq)
+ 
+ 	const outroStarted = hostEvents().some(
+ 		(e) => e[1].type === 'code_update' && e[1].kind === 'outro',
+ 	)
+ 	expect(outroStarted).toBe(false)
+ 
+ 	const endPolls = await prisma.poll.findMany({
+ 		where: { roomId: room.id, kind: 'end' },
+ 	})
+ 	expect(endPolls).toHaveLength(1)
+diff --git a/backend/polls/scheduler.ts b/backend/polls/scheduler.ts
+index 62206ee..e8a9073 100644
+--- a/backend/polls/scheduler.ts
++++ b/backend/polls/scheduler.ts
+@@ -420,29 +420,28 @@ async function queueNextEvolution(
+ 			roomId,
+ 			kind: 'end',
+ 			status: { in: ['queued', 'open'] },
+ 		},
+ 	})
+ 	if (existingEnd) return
+ 
+ 	const now = clock.now()
+ 	const insertAt = room.createdAt.getTime() + room.lengthSec * 750
+ 	const intervalMs = Math.max(room.pollIntervalSec, MIN_INTERVAL_SECS) * 1000
+-	if (!opts?.afterContinue) {
+-		if (now >= insertAt) return
+-		if (now + intervalMs >= insertAt) return
+-	}
+ 
+ 	const scheduler = active.get(roomId)
+-	if (scheduler?.continuing && now >= insertAt) {
++	if (scheduler?.continuing) {
+ 		const endAt = room.createdAt.getTime() + room.lengthSec * 1000
+ 		if (now + intervalMs >= endAt) return
++	} else if (!opts?.afterContinue) {
++		if (now >= insertAt) return
++		if (now + intervalMs >= insertAt) return
+ 	}
+ 
+ 	const last = await prisma.poll.findFirst({
+ 		where: { roomId },
+ 		orderBy: { seq: 'desc' },
+ 	})
+ 	const seq = (last?.seq ?? 0) + 1
+ 	const provider = getLlmProvider()
+ 	const question = await generateNextQuestion(
+ 		provider,
+@@ -539,21 +538,21 @@ function tallyVotes(
+ function pickWinner(
+ 	options: PollOption[],
+ 	votes: { choice: string }[],
+ 	pollId: string,
+ ): string | null {
+ 	const counts = tallyVotes(votes, options)
+ 	let max = -1
+ 	for (const count of counts.values()) {
+ 		if (count > max) max = count
+ 	}
+-	if (max === 0) return null
++	if (max <= 0) return null
+ 	const tied = options.filter((option) => counts.get(option.key) === max)
+ 	if (tied.length === 1) return tied[0].key
+ 	const seed = hashStringToSeed(pollId)
+ 	// biome-ignore lint/suspicious/noConsole: spec requires tie-break seed logged
+ 	console.info(`tie-break seed=${seed} for poll ${pollId}`)
+ 	return tied[seededRandomInt(seed, tied.length)].key
+ }
+ 
+ function hashStringToSeed(input: string): number {
+ 	let hash = 0

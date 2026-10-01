@@ -1,0 +1,404 @@
+# Review package: 6552a13..0b56417
+
+## Commits
+0b56417 feat(music): LLM engine — initial pattern, questions, evolution, outro
+
+## Files changed
+ backend/music/__tests__/engine.test.ts | 253 +++++++++++++++++++++++++++++++++
+ backend/music/engine.ts                | 128 +++++++++++++++++
+ 2 files changed, 381 insertions(+)
+
+## Diff
+diff --git a/backend/music/__tests__/engine.test.ts b/backend/music/__tests__/engine.test.ts
+new file mode 100644
+index 0000000..eaaca53
+--- /dev/null
++++ b/backend/music/__tests__/engine.test.ts
+@@ -0,0 +1,253 @@
++import { expect, test } from 'bun:test'
++import { type LlmProvider, MockLlmProvider } from '@backend/llm/provider'
++import {
++	generateEvolution,
++	generateInitialPattern,
++	generateNextQuestion,
++	generateOutro,
++	MusicGenError,
++} from '@backend/music/engine'
++import { initialStateDoc } from '@backend/music/state-doc'
++
++class ThrowingProvider implements LlmProvider {
++	calls = 0
++
++	async chat(): Promise<string> {
++		this.calls++
++		throw new Error('timeout')
++	}
++}
++
++const params = { genre: 'techno', bpm: 132 }
++const validCode = 's("bd sd cp hh")'
++const invalidCode = 's("bd sd'
++const fetchCode = "fetch('/evil')"
++const fallbackQuestion = 'Do you want more energy? yes/no'
++const longQuestion = 'x'.repeat(121)
++
++function callsMade(provider: MockLlmProvider, initial: string[]): number {
++	return (
++		initial.length -
++		(provider as unknown as { responses: string[] }).responses.length
++	)
++}
++
++// --- generateInitialPattern ---
++
++test('generateInitialPattern: happy path returns validated code and seeded doc', async () => {
++	const provider = new MockLlmProvider([validCode])
++	const { code, doc } = await generateInitialPattern(provider, params)
++
++	expect(code).toBe(validCode)
++	expect(doc.genre).toBe('techno')
++	expect(doc.bpm).toBe(132)
++	expect(doc.history).toHaveLength(1)
++	expect(doc.history[0]).toMatchObject({
++		question: 'start set',
++		winner: 'yes',
++		changeSummary: 'initial pattern',
++	})
++	expect(callsMade(provider, [validCode])).toBe(1)
++})
++
++test('generateInitialPattern: invalid-then-valid retries once and makes exactly 2 calls', async () => {
++	const responses = [invalidCode, validCode]
++	const provider = new MockLlmProvider(responses)
++	const { code } = await generateInitialPattern(provider, params)
++
++	expect(code).toBe(validCode)
++	expect(callsMade(provider, responses)).toBe(2)
++})
++
++test('generateInitialPattern: twice-invalid throws MusicGenError after 2 calls', async () => {
++	const responses = [invalidCode, invalidCode]
++	const provider = new MockLlmProvider(responses)
++
++	await expect(generateInitialPattern(provider, params)).rejects.toThrow(
++		MusicGenError,
++	)
++	expect(callsMade(provider, responses)).toBe(2)
++})
++
++test('generateInitialPattern: provider throw follows retry-then-throw path', async () => {
++	const provider = new ThrowingProvider()
++
++	await expect(generateInitialPattern(provider, params)).rejects.toThrow(
++		MusicGenError,
++	)
++	expect(provider.calls).toBe(2)
++})
++
++// --- generateEvolution ---
++
++test('generateEvolution: happy path returns validated code and derived change summary', async () => {
++	const provider = new MockLlmProvider([validCode])
++	const doc = initialStateDoc(params)
++	const result = await generateEvolution(
++		provider,
++		doc,
++		'Add bass?',
++		'yes',
++		validCode,
++	)
++
++	expect(result).not.toBeNull()
++	expect(result?.code).toBe(validCode)
++	expect(result?.changeSummary).toBe('Add bass? — winner: yes')
++	expect(callsMade(provider, [validCode])).toBe(1)
++})
++
++test('generateEvolution: invalid-then-valid retries once and makes exactly 2 calls', async () => {
++	const responses = [invalidCode, validCode]
++	const provider = new MockLlmProvider(responses)
++	const doc = initialStateDoc(params)
++	const result = await generateEvolution(
++		provider,
++		doc,
++		'Add bass?',
++		'yes',
++		validCode,
++	)
++
++	expect(result?.code).toBe(validCode)
++	expect(callsMade(provider, responses)).toBe(2)
++})
++
++test('generateEvolution: twice-invalid returns null after 2 calls', async () => {
++	const responses = [invalidCode, invalidCode]
++	const provider = new MockLlmProvider(responses)
++	const doc = initialStateDoc(params)
++	const result = await generateEvolution(
++		provider,
++		doc,
++		'Add bass?',
++		'yes',
++		validCode,
++	)
++
++	expect(result).toBeNull()
++	expect(callsMade(provider, responses)).toBe(2)
++})
++
++test('generateEvolution: fetch-containing code is rejected by compileCheck guard', async () => {
++	const responses = [fetchCode, validCode]
++	const provider = new MockLlmProvider(responses)
++	const doc = initialStateDoc(params)
++	const result = await generateEvolution(
++		provider,
++		doc,
++		'Add bass?',
++		'yes',
++		validCode,
++	)
++
++	expect(result?.code).toBe(validCode)
++	expect(callsMade(provider, responses)).toBe(2)
++})
++
++test('generateEvolution: provider throw returns null after 2 attempts', async () => {
++	const provider = new ThrowingProvider()
++	const doc = initialStateDoc(params)
++	const result = await generateEvolution(
++		provider,
++		doc,
++		'Add bass?',
++		'yes',
++		validCode,
++	)
++
++	expect(result).toBeNull()
++	expect(provider.calls).toBe(2)
++})
++
++// --- generateOutro ---
++
++test('generateOutro: happy path returns validated code', async () => {
++	const provider = new MockLlmProvider([validCode])
++	const doc = initialStateDoc(params)
++	const outro = await generateOutro(provider, doc, validCode)
++
++	expect(outro).toBe(validCode)
++	expect(callsMade(provider, [validCode])).toBe(1)
++})
++
++test('generateOutro: invalid-then-valid retries once and makes exactly 2 calls', async () => {
++	const responses = [invalidCode, validCode]
++	const provider = new MockLlmProvider(responses)
++	const doc = initialStateDoc(params)
++	const outro = await generateOutro(provider, doc, validCode)
++
++	expect(outro).toBe(validCode)
++	expect(callsMade(provider, responses)).toBe(2)
++})
++
++test('generateOutro: twice-invalid throws MusicGenError after 2 calls', async () => {
++	const responses = [invalidCode, invalidCode]
++	const provider = new MockLlmProvider(responses)
++	const doc = initialStateDoc(params)
++
++	await expect(generateOutro(provider, doc, validCode)).rejects.toThrow(
++		MusicGenError,
++	)
++	expect(callsMade(provider, responses)).toBe(2)
++})
++
++test('generateOutro: provider throw follows retry-then-throw path', async () => {
++	const provider = new ThrowingProvider()
++	const doc = initialStateDoc(params)
++
++	await expect(generateOutro(provider, doc, validCode)).rejects.toThrow(
++		MusicGenError,
++	)
++	expect(provider.calls).toBe(2)
++})
++
++// --- generateNextQuestion ---
++
++test('generateNextQuestion: happy path returns trimmed question', async () => {
++	const provider = new MockLlmProvider(['  Add more bass?  '])
++	const doc = initialStateDoc(params)
++	const question = await generateNextQuestion(provider, doc)
++
++	expect(question).toBe('Add more bass?')
++	expect(callsMade(provider, ['  Add more bass?  '])).toBe(1)
++})
++
++test('generateNextQuestion: empty-then-valid retries once and returns valid question', async () => {
++	const responses = ['   ', 'Add more bass?']
++	const provider = new MockLlmProvider(responses)
++	const doc = initialStateDoc(params)
++	const question = await generateNextQuestion(provider, doc)
++
++	expect(question).toBe('Add more bass?')
++	expect(callsMade(provider, responses)).toBe(2)
++})
++
++test('generateNextQuestion: oversized-then-valid retries once and returns valid question', async () => {
++	const responses = [longQuestion, 'Add more bass?']
++	const provider = new MockLlmProvider(responses)
++	const doc = initialStateDoc(params)
++	const question = await generateNextQuestion(provider, doc)
++
++	expect(question).toBe('Add more bass?')
++	expect(callsMade(provider, responses)).toBe(2)
++})
++
++test('generateNextQuestion: twice-invalid falls back to canned question after 2 calls', async () => {
++	const responses = [longQuestion, '   ']
++	const provider = new MockLlmProvider(responses)
++	const doc = initialStateDoc(params)
++	const question = await generateNextQuestion(provider, doc)
++
++	expect(question).toBe(fallbackQuestion)
++	expect(callsMade(provider, responses)).toBe(2)
++})
++
++test('generateNextQuestion: provider throw falls back to canned question after 2 attempts', async () => {
++	const provider = new ThrowingProvider()
++	const doc = initialStateDoc(params)
++	const question = await generateNextQuestion(provider, doc)
++
++	expect(question).toBe(fallbackQuestion)
++	expect(provider.calls).toBe(2)
++})
+diff --git a/backend/music/engine.ts b/backend/music/engine.ts
+new file mode 100644
+index 0000000..772aee0
+--- /dev/null
++++ b/backend/music/engine.ts
+@@ -0,0 +1,128 @@
++import type { LlmProvider } from '@backend/llm/provider'
++import {
++	buildEvolutionPrompt,
++	buildInitialPatternPrompt,
++	buildOutroPrompt,
++	buildQuestionPrompt,
++} from '@backend/music/prompts'
++import {
++	applyChange,
++	initialStateDoc,
++	type MusicParams,
++	type StateDoc,
++} from '@backend/music/state-doc'
++import { compileCheck } from '@backend/music/validate'
++
++export class MusicGenError extends Error {
++	constructor(message: string, options?: { cause?: unknown }) {
++		super(message, options)
++		this.name = 'MusicGenError'
++	}
++}
++
++const MAX_CODE_ATTEMPTS = 2
++const MAX_QUESTION_ATTEMPTS = 2
++const FALLBACK_QUESTION = 'Do you want more energy? yes/no'
++const INITIAL_QUESTION = 'start set'
++const INITIAL_WINNER = 'yes'
++const INITIAL_SUMMARY = 'initial pattern'
++
++async function tryGenerateCode(
++	provider: LlmProvider,
++	prompt: string,
++): Promise<string | null> {
++	for (let attempt = 0; attempt < MAX_CODE_ATTEMPTS; attempt++) {
++		let raw: string
++		try {
++			raw = await provider.chat(prompt)
++		} catch {
++			continue
++		}
++
++		const check = compileCheck(raw)
++		if (check.ok) {
++			return raw
++		}
++	}
++
++	return null
++}
++
++export async function generateInitialPattern(
++	provider: LlmProvider,
++	params: MusicParams,
++): Promise<{ code: string; doc: StateDoc }> {
++	const prompt = buildInitialPatternPrompt(params)
++	const code = await tryGenerateCode(provider, prompt)
++
++	if (code === null) {
++		throw new MusicGenError(
++			'Failed to generate a valid initial pattern after 2 attempts',
++		)
++	}
++
++	const doc = applyChange(
++		initialStateDoc(params),
++		INITIAL_QUESTION,
++		INITIAL_WINNER,
++		INITIAL_SUMMARY,
++	)
++
++	return { code, doc }
++}
++
++// biome-ignore lint/complexity/useMaxParams: public orchestration signature mandated by Task 6 brief
++export async function generateEvolution(
++	provider: LlmProvider,
++	doc: StateDoc,
++	question: string,
++	winner: string,
++	currentCode: string,
++): Promise<{ code: string; changeSummary: string } | null> {
++	const prompt = buildEvolutionPrompt(doc, question, winner, currentCode)
++	const code = await tryGenerateCode(provider, prompt)
++
++	if (code === null) {
++		return null
++	}
++
++	return { code, changeSummary: `${question} — winner: ${winner}` }
++}
++
++export async function generateOutro(
++	provider: LlmProvider,
++	doc: StateDoc,
++	currentCode: string,
++): Promise<string> {
++	const prompt = buildOutroPrompt(doc, currentCode)
++	const code = await tryGenerateCode(provider, prompt)
++
++	if (code === null) {
++		throw new MusicGenError('Failed to generate a valid outro after 2 attempts')
++	}
++
++	return code
++}
++
++export async function generateNextQuestion(
++	provider: LlmProvider,
++	doc: StateDoc,
++): Promise<string> {
++	const prompt = buildQuestionPrompt(doc)
++
++	for (let attempt = 0; attempt < MAX_QUESTION_ATTEMPTS; attempt++) {
++		let raw: string
++		try {
++			raw = await provider.chat(prompt)
++		} catch {
++			continue
++		}
++
++		const trimmed = raw.trim()
++		if (trimmed.length > 0 && trimmed.length <= 120) {
++			return trimmed
++		}
++	}
++
++	return FALLBACK_QUESTION
++}

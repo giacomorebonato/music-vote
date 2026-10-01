@@ -1,0 +1,1301 @@
+# Review package: 194d851..9404d55
+
+## Commits
+9404d55 docs: license, deploy + ops docs, product README
+
+## Files changed
+ .env.example                    |  21 +-
+ AGENTS.md                       |   2 +-
+ LICENSE                         | 661 ++++++++++++++++++++++++++++++++++++++++
+ README.md                       |  77 +++--
+ apm.yml                         |   2 +-
+ backend/server.ts               |   2 +-
+ backend/trpc/public.ts          |   4 +-
+ docs/agents/commands.md         |   5 +-
+ docs/agents/conventions.md      |   6 +-
+ docs/agents/deployment.md       |  16 +-
+ docs/agents/music-vote.md       | 125 ++++++++
+ e2e/ssr.spec.ts                 |   6 +-
+ fly.toml                        |   6 +-
+ frontend/components/sidebar.tsx |   2 +-
+ frontend/index.html             |   2 +-
+ frontend/routes/home.tsx        |   2 +-
+ scripts/bootstrap.sh            |   2 +-
+ 17 files changed, 876 insertions(+), 65 deletions(-)
+
+## Diff
+diff --git a/.env.example b/.env.example
+index 17942c1..db81d99 100644
+--- a/.env.example
++++ b/.env.example
+@@ -1,21 +1,32 @@
+ DATABASE_URL=file:./dev.db
+ BETTER_AUTH_SECRET=replace-with-openssl-rand-base64-32
+ BETTER_AUTH_URL=http://localhost:3000
+ PORT=3000
+ 
+ # Bot prerender (optional; prod-only). Renders bot requests via the Lightpanda
+-# binary shipped by `@lightpanda/browser`'s postinstall.
+-SSR_CACHE_DIR=
+-LIGHTPANDA_EXECUTABLE_PATH=
++# binary shipped by `@lightpanda/browser`'s postinstall. Leave both commented
++# out to use the defaults (`SSR_CACHE_DIR` → a fresh mkdtemp dir,
++# `LIGHTPANDA_EXECUTABLE_PATH` → `~/.cache/lightpanda-node/lightpanda`); an
++# empty assignment is not the same as being unset for the binary path.
++# SSR_CACHE_DIR=
++# LIGHTPANDA_EXECUTABLE_PATH=
+ 
+ # LLM provider: `ollama` (default) or `mock` (scripted responses for tests)
+ LLM_PROVIDER=ollama
+ 
++# Path to a `{ "responses": string[] }` fixture, read when LLM_PROVIDER=mock.
++# Each provider instance re-reads it from index 0, so responses are deterministic.
++LLM_MOCK_SCRIPT=
++
+ # Ollama endpoint (local dev server, or https://ollama.com for cloud)
+ OLLAMA_BASE_URL=http://localhost:11434
+ 
+-# Ollama model tag, e.g. llama3.1
++# Ollama model tag, e.g. llama3.1 (required when LLM_PROVIDER=ollama)
+ OLLAMA_MODEL=
+ 
+ # Ollama cloud subscription key; sent as `Authorization: Bearer <key>` when set
+-OLLAMA_API_KEY=
+\ No newline at end of file
++OLLAMA_API_KEY=
++
++# Test-only: `1` shrinks the poll open window to 5s and clamps the poll interval
++# minimum to 10s so the E2E cycle runs fast (see backend/polls/scheduler.ts).
++MV_E2E_FAST=
+\ No newline at end of file
+diff --git a/AGENTS.md b/AGENTS.md
+index ff9fa19..2ce24e7 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -5,11 +5,11 @@ Bun fullstack starter: React 19 SPA (TanStack Router/Query/Form, tRPC, daisyUI v
+ **Bun everywhere** — runtime, package manager, bundler, test runner. Never npm/pnpm/yarn.
+ 
+ - `bun run bootstrap` — fresh-clone setup (idempotent)
+ - `bun run dev` — dev server with HMR
+ - `bun run build` — production bundle (React Compiler on)
+ - `bun run check` — run before claiming work done; `bun run check:full` adds E2E for UI/auth/route changes
+ - `bun run premerge` — `check`, then fast-forward → main and push
+ 
+ Aliases `@backend/* @frontend/* @shared/*`; unit tests co-located in `__tests__/`; placement rules in `.agents/skills/project-structure/SKILL.md`.
+ 
+-Deep docs: [vertical-slice workflow](docs/agents/vertical-slices.md) · [scripts/env/hooks](docs/agents/commands.md) · [conventions](docs/agents/conventions.md) · [Prisma v7](docs/agents/prisma.md) · [bot SSR](docs/agents/bot-ssr.md) · [React Compiler](docs/agents/react-compiler.md) · [deployment](docs/agents/deployment.md)
++Deep docs: [vertical-slice workflow](docs/agents/vertical-slices.md) · [scripts/env/hooks](docs/agents/commands.md) · [conventions](docs/agents/conventions.md) · [Prisma v7](docs/agents/prisma.md) · [bot SSR](docs/agents/bot-ssr.md) · [React Compiler](docs/agents/react-compiler.md) · [deployment](docs/agents/deployment.md) · [env/deploy/ops](docs/agents/music-vote.md)
+diff --git a/LICENSE b/LICENSE
+new file mode 100644
+index 0000000..be3f7b2
+--- /dev/null
++++ b/LICENSE
+@@ -0,0 +1,661 @@
++                    GNU AFFERO GENERAL PUBLIC LICENSE
++                       Version 3, 19 November 2007
++
++ Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
++ Everyone is permitted to copy and distribute verbatim copies
++ of this license document, but changing it is not allowed.
++
++                            Preamble
++
++  The GNU Affero General Public License is a free, copyleft license for
++software and other kinds of works, specifically designed to ensure
++cooperation with the community in the case of network server software.
++
++  The licenses for most software and other practical works are designed
++to take away your freedom to share and change the works.  By contrast,
++our General Public Licenses are intended to guarantee your freedom to
++share and change all versions of a program--to make sure it remains free
++software for all its users.
++
++  When we speak of free software, we are referring to freedom, not
++price.  Our General Public Licenses are designed to make sure that you
++have the freedom to distribute copies of free software (and charge for
++them if you wish), that you receive source code or can get it if you
++want it, that you can change the software or use pieces of it in new
++free programs, and that you know you can do these things.
++
++  Developers that use our General Public Licenses protect your rights
++with two steps: (1) assert copyright on the software, and (2) offer
++you this License which gives you legal permission to copy, distribute
++and/or modify the software.
++
++  A secondary benefit of defending all users' freedom is that
++improvements made in alternate versions of the program, if they
++receive widespread use, become available for other developers to
++incorporate.  Many developers of free software are heartened and
++encouraged by the resulting cooperation.  However, in the case of
++software used on network servers, this result may fail to come about.
++The GNU General Public License permits making a modified version and
++letting the public access it on a server without ever releasing its
++source code to the public.
++
++  The GNU Affero General Public License is designed specifically to
++ensure that, in such cases, the modified source code becomes available
++to the community.  It requires the operator of a network server to
++provide the source code of the modified version running there to the
++users of that server.  Therefore, public use of a modified version, on
++a publicly accessible server, gives the public access to the source
++code of the modified version.
++
++  An older license, called the Affero General Public License and
++published by Affero, was designed to accomplish similar goals.  This is
++a different license, not a version of the Affero GPL, but Affero has
++released a new version of the Affero GPL which permits relicensing under
++this license.
++
++  The precise terms and conditions for copying, distribution and
++modification follow.
++
++                       TERMS AND CONDITIONS
++
++  0. Definitions.
++
++  "This License" refers to version 3 of the GNU Affero General Public License.
++
++  "Copyright" also means copyright-like laws that apply to other kinds of
++works, such as semiconductor masks.
++
++  "The Program" refers to any copyrightable work licensed under this
++License.  Each licensee is addressed as "you".  "Licensees" and
++"recipients" may be individuals or organizations.
++
++  To "modify" a work means to copy from or adapt all or part of the work
++in a fashion requiring copyright permission, other than the making of an
++exact copy.  The resulting work is called a "modified version" of the
++earlier work or a work "based on" the earlier work.
++
++  A "covered work" means either the unmodified Program or a work based
++on the Program.
++
++  To "propagate" a work means to do anything with it that, without
++permission, would make you directly or secondarily liable for
++infringement under applicable copyright law, except executing it on a
++computer or modifying a private copy.  Propagation includes copying,
++distribution (with or without modification), making available to the
++public, and in some countries other activities as well.
++
++  To "convey" a work means any kind of propagation that enables other
++parties to make or receive copies.  Mere interaction with a user through
++a computer network, with no transfer of a copy, is not conveying.
++
++  An interactive user interface displays "Appropriate Legal Notices"
++to the extent that it includes a convenient and prominently visible
++feature that (1) displays an appropriate copyright notice, and (2)
++tells the user that there is no warranty for the work (except to the
++extent that warranties are provided), that licensees may convey the
++work under this License, and how to view a copy of this License.  If
++the interface presents a list of user commands or options, such as a
++menu, a prominent item in the list meets this criterion.
++
++  1. Source Code.
++
++  The "source code" for a work means the preferred form of the work
++for making modifications to it.  "Object code" means any non-source
++form of a work.
++
++  A "Standard Interface" means an interface that either is an official
++standard defined by a recognized standards body, or, in the case of
++interfaces specified for a particular programming language, one that
++is widely used among developers working in that language.
++
++  The "System Libraries" of an executable work include anything, other
++than the work as a whole, that (a) is included in the normal form of
++packaging a Major Component, but which is not part of that Major
++Component, and (b) serves only to enable use of the work with that
++Major Component, or to implement a Standard Interface for which an
++implementation is available to the public in source code form.  A
++"Major Component", in this context, means a major essential component
++(kernel, window system, and so on) of the specific operating system
++(if any) on which the executable work runs, or a compiler used to
++produce the work, or an object code interpreter used to run it.
++
++  The "Corresponding Source" for a work in object code form means all
++the source code needed to generate, install, and (for an executable
++work) run the object code and to modify the work, including scripts to
++control those activities.  However, it does not include the work's
++System Libraries, or general-purpose tools or generally available free
++programs which are used unmodified in performing those activities but
++which are not part of the work.  For example, Corresponding Source
++includes interface definition files associated with source files for
++the work, and the source code for shared libraries and dynamically
++linked subprograms that the work is specifically designed to require,
++such as by intimate data communication or control flow between those
++subprograms and other parts of the work.
++
++  The Corresponding Source need not include anything that users
++can regenerate automatically from other parts of the Corresponding
++Source.
++
++  The Corresponding Source for a work in source code form is that
++same work.
++
++  2. Basic Permissions.
++
++  All rights granted under this License are granted for the term of
++copyright on the Program, and are irrevocable provided the stated
++conditions are met.  This License explicitly affirms your unlimited
++permission to run the unmodified Program.  The output from running a
++covered work is covered by this License only if the output, given its
++content, constitutes a covered work.  This License acknowledges your
++rights of fair use or other equivalent, as provided by copyright law.
++
++  You may make, run and propagate covered works that you do not
++convey, without conditions so long as your license otherwise remains
++in force.  You may convey covered works to others for the sole purpose
++of having them make modifications exclusively for you, or provide you
++with facilities for running those works, provided that you comply with
++the terms of this License in conveying all material for which you do
++not control copyright.  Those thus making or running the covered works
++for you must do so exclusively on your behalf, under your direction
++and control, on terms that prohibit them from making any copies of
++your copyrighted material outside their relationship with you.
++
++  Conveying under any other circumstances is permitted solely under
++the conditions stated below.  Sublicensing is not allowed; section 10
++makes it unnecessary.
++
++  3. Protecting Users' Legal Rights From Anti-Circumvention Law.
++
++  No covered work shall be deemed part of an effective technological
++measure under any applicable law fulfilling obligations under article
++11 of the WIPO copyright treaty adopted on 20 December 1996, or
++similar laws prohibiting or restricting circumvention of such
++measures.
++
++  When you convey a covered work, you waive any legal power to forbid
++circumvention of technological measures to the extent such circumvention
++is effected by exercising rights under this License with respect to
++the covered work, and you disclaim any intention to limit operation or
++modification of the work as a means of enforcing, against the work's
++users, your or third parties' legal rights to forbid circumvention of
++technological measures.
++
++  4. Conveying Verbatim Copies.
++
++  You may convey verbatim copies of the Program's source code as you
++receive it, in any medium, provided that you conspicuously and
++appropriately publish on each copy an appropriate copyright notice;
++keep intact all notices stating that this License and any
++non-permissive terms added in accord with section 7 apply to the code;
++keep intact all notices of the absence of any warranty; and give all
++recipients a copy of this License along with the Program.
++
++  You may charge any price or no price for each copy that you convey,
++and you may offer support or warranty protection for a fee.
++
++  5. Conveying Modified Source Versions.
++
++  You may convey a work based on the Program, or the modifications to
++produce it from the Program, in the form of source code under the
++terms of section 4, provided that you also meet all of these conditions:
++
++    a) The work must carry prominent notices stating that you modified
++    it, and giving a relevant date.
++
++    b) The work must carry prominent notices stating that it is
++    released under this License and any conditions added under section
++    7.  This requirement modifies the requirement in section 4 to
++    "keep intact all notices".
++
++    c) You must license the entire work, as a whole, under this
++    License to anyone who comes into possession of a copy.  This
++    License will therefore apply, along with any applicable section 7
++    additional terms, to the whole of the work, and all its parts,
++    regardless of how they are packaged.  This License gives no
++    permission to license the work in any other way, but it does not
++    invalidate such permission if you have separately received it.
++
++    d) If the work has interactive user interfaces, each must display
++    Appropriate Legal Notices; however, if the Program has interactive
++    interfaces that do not display Appropriate Legal Notices, your
++    work need not make them do so.
++
++  A compilation of a covered work with other separate and independent
++works, which are not by their nature extensions of the covered work,
++and which are not combined with it such as to form a larger program,
++in or on a volume of a storage or distribution medium, is called an
++"aggregate" if the compilation and its resulting copyright are not
++used to limit the access or legal rights of the compilation's users
++beyond what the individual works permit.  Inclusion of a covered work
++in an aggregate does not cause this License to apply to the other
++parts of the aggregate.
++
++  6. Conveying Non-Source Forms.
++
++  You may convey a covered work in object code form under the terms
++of sections 4 and 5, provided that you also convey the
++machine-readable Corresponding Source under the terms of this License,
++in one of these ways:
++
++    a) Convey the object code in, or embodied in, a physical product
++    (including a physical distribution medium), accompanied by the
++    Corresponding Source fixed on a durable physical medium
++    customarily used for software interchange.
++
++    b) Convey the object code in, or embodied in, a physical product
++    (including a physical distribution medium), accompanied by a
++    written offer, valid for at least three years and valid for as
++    long as you offer spare parts or customer support for that product
++    model, to give anyone who possesses the object code either (1) a
++    copy of the Corresponding Source for all the software in the
++    product that is covered by this License, on a durable physical
++    medium customarily used for software interchange, for a price no
++    more than your reasonable cost of physically performing this
++    conveying of source, or (2) access to copy the
++    Corresponding Source from a network server at no charge.
++
++    c) Convey individual copies of the object code with a copy of the
++    written offer to provide the Corresponding Source.  This
++    alternative is allowed only occasionally and noncommercially, and
++    only if you received the object code with such an offer, in accord
++    with subsection 6b.
++
++    d) Convey the object code by offering access from a designated
++    place (gratis or for a charge), and offer equivalent access to the
++    Corresponding Source in the same way through the same place at no
++    further charge.  You need not require recipients to copy the
++    Corresponding Source along with the object code.  If the place to
++    copy the object code is a network server, the Corresponding Source
++    may be on a different server (operated by you or a third party)
++    that supports equivalent copying facilities, provided you maintain
++    clear directions next to the object code saying where to find the
++    Corresponding Source.  Regardless of what server hosts the
++    Corresponding Source, you remain obligated to ensure that it is
++    available for as long as needed to satisfy these requirements.
++
++    e) Convey the object code using peer-to-peer transmission, provided
++    you inform other peers where the object code and Corresponding
++    Source of the work are being offered to the general public at no
++    charge under subsection 6d.
++
++  A separable portion of the object code, whose source code is excluded
++from the Corresponding Source as a System Library, need not be
++included in conveying the object code work.
++
++  A "User Product" is either (1) a "consumer product", which means any
++tangible personal property which is normally used for personal, family,
++or household purposes, or (2) anything designed or sold for incorporation
++into a dwelling.  In determining whether a product is a consumer product,
++doubtful cases shall be resolved in favor of coverage.  For a particular
++product received by a particular user, "normally used" refers to a
++typical or common use of that class of product, regardless of the status
++of the particular user or of the way in which the particular user
++actually uses, or expects or is expected to use, the product.  A product
++is a consumer product regardless of whether the product has substantial
++commercial, industrial or non-consumer uses, unless such uses represent
++the only significant mode of use of the product.
++
++  "Installation Information" for a User Product means any methods,
++procedures, authorization keys, or other information required to install
++and execute modified versions of a covered work in that User Product from
++a modified version of its Corresponding Source.  The information must
++suffice to ensure that the continued functioning of the modified object
++code is in no case prevented or interfered with solely because
++modification has been made.
++
++  If you convey an object code work under this section in, or with, or
++specifically for use in, a User Product, and the conveying occurs as
++part of a transaction in which the right of possession and use of the
++User Product is transferred to the recipient in perpetuity or for a
++fixed term (regardless of how the transaction is characterized), the
++Corresponding Source conveyed under this section must be accompanied
++by the Installation Information.  But this requirement does not apply
++if neither you nor any third party retains the ability to install
++modified object code on the User Product (for example, the work has
++been installed in ROM).
++
++  The requirement to provide Installation Information does not include a
++requirement to continue to provide support service, warranty, or updates
++for a work that has been modified or installed by the recipient, or for
++the User Product in which it has been modified or installed.  Access to a
++network may be denied when the modification itself materially and
++adversely affects the operation of the network or violates the rules and
++protocols for communication across the network.
++
++  Corresponding Source conveyed, and Installation Information provided,
++in accord with this section must be in a format that is publicly
++documented (and with an implementation available to the public in
++source code form), and must require no special password or key for
++unpacking, reading or copying.
++
++  7. Additional Terms.
++
++  "Additional permissions" are terms that supplement the terms of this
++License by making exceptions from one or more of its conditions.
++Additional permissions that are applicable to the entire Program shall
++be treated as though they were included in this License, to the extent
++that they are valid under applicable law.  If additional permissions
++apply only to part of the Program, that part may be used separately
++under those permissions, but the entire Program remains governed by
++this License without regard to the additional permissions.
++
++  When you convey a copy of a covered work, you may at your option
++remove any additional permissions from that copy, or from any part of
++it.  (Additional permissions may be written to require their own
++removal in certain cases when you modify the work.)  You may place
++additional permissions on material, added by you to a covered work,
++for which you have or can give appropriate copyright permission.
++
++  Notwithstanding any other provision of this License, for material you
++add to a covered work, you may (if authorized by the copyright holders of
++that material) supplement the terms of this License with terms:
++
++    a) Disclaiming warranty or limiting liability differently from the
++    terms of sections 15 and 16 of this License; or
++
++    b) Requiring preservation of specified reasonable legal notices or
++    author attributions in that material or in the Appropriate Legal
++    Notices displayed by works containing it; or
++
++    c) Prohibiting misrepresentation of the origin of that material, or
++    requiring that modified versions of such material be marked in
++    reasonable ways as different from the original version; or
++
++    d) Limiting the use for publicity purposes of names of licensors or
++    authors of the material; or
++
++    e) Declining to grant rights under trademark law for use of some
++    trade names, trademarks, or service marks; or
++
++    f) Requiring indemnification of licensors and authors of that
++    material by anyone who conveys the material (or modified versions of
++    it) with contractual assumptions of liability to the recipient, for
++    any liability that these contractual assumptions directly impose on
++    those licensors and authors.
++
++  All other non-permissive additional terms are considered "further
++restrictions" within the meaning of section 10.  If the Program as you
++received it, or any part of it, contains a notice stating that it is
++governed by this License along with a term that is a further
++restriction, you may remove that term.  If a license document contains
++a further restriction but permits relicensing or conveying under this
++License, you may add to a covered work material governed by the terms
++of that license document, provided that the further restriction does
++not survive such relicensing or conveying.
++
++  If you add terms to a covered work in accord with this section, you
++must place, in the relevant source files, a statement of the
++additional terms that apply to those files, or a notice indicating
++where to find the applicable terms.
++
++  Additional terms, permissive or non-permissive, may be stated in the
++form of a separately written license, or stated as exceptions;
++the above requirements apply either way.
++
++  8. Termination.
++
++  You may not propagate or modify a covered work except as expressly
++provided under this License.  Any attempt otherwise to propagate or
++modify it is void, and will automatically terminate your rights under
++this License (including any patent licenses granted under the third
++paragraph of section 11).
++
++  However, if you cease all violation of this License, then your
++license from a particular copyright holder is reinstated (a)
++provisionally, unless and until the copyright holder explicitly and
++finally terminates your license, and (b) permanently, if the copyright
++holder fails to notify you of the violation by some reasonable means
++prior to 60 days after the cessation.
++
++  Moreover, your license from a particular copyright holder is
++reinstated permanently if the copyright holder notifies you of the
++violation by some reasonable means, this is the first time you have
++received notice of violation of this License (for any work) from that
++copyright holder, and you cure the violation prior to 30 days after
++your receipt of the notice.
++
++  Termination of your rights under this section does not terminate the
++licenses of parties who have received copies or rights from you under
++this License.  If your rights have been terminated and not permanently
++reinstated, you do not qualify to receive new licenses for the same
++material under section 10.
++
++  9. Acceptance Not Required for Having Copies.
++
++  You are not required to accept this License in order to receive or
++run a copy of the Program.  Ancillary propagation of a covered work
++occurring solely as a consequence of using peer-to-peer transmission
++to receive a copy likewise does not require acceptance.  However,
++nothing other than this License grants you permission to propagate or
++modify any covered work.  These actions infringe copyright if you do
++not accept this License.  Therefore, by modifying or propagating a
++covered work, you indicate your acceptance of this License to do so.
++
++  10. Automatic Licensing of Downstream Recipients.
++
++  Each time you convey a covered work, the recipient automatically
++receives a license from the original licensors, to run, modify and
++propagate that work, subject to this License.  You are not responsible
++for enforcing compliance by third parties with this License.
++
++  An "entity transaction" is a transaction transferring control of an
++organization, or substantially all assets of one, or subdividing an
++organization, or merging organizations.  If propagation of a covered
++work results from an entity transaction, each party to that
++transaction who receives a copy of the work also receives whatever
++licenses to the work the party's predecessor in interest had or could
++give under the previous paragraph, plus a right to possession of the
++Corresponding Source of the work from the predecessor in interest, if
++the predecessor has it or can get it with reasonable efforts.
++
++  You may not impose any further restrictions on the exercise of the
++rights granted or affirmed under this License.  For example, you may
++not impose a license fee, royalty, or other charge for exercise of
++rights granted under this License, and you may not initiate litigation
++(including a cross-claim or counterclaim in a lawsuit) alleging that
++any patent claim is infringed by making, using, selling, offering for
++sale, or importing the Program or any portion of it.
++
++  11. Patents.
++
++  A "contributor" is a copyright holder who authorizes use under this
++License of the Program or a work on which the Program is based.  The
++work thus licensed is called the contributor's "contributor version".
++
++  A contributor's "essential patent claims" are all patent claims
++owned or controlled by the contributor, whether already acquired or
++hereafter acquired, that would be infringed by some manner, permitted
++by this License, of making, using, or selling its contributor version,
++but do not include claims that would be infringed only as a
++consequence of further modification of the contributor version.  For
++purposes of this definition, "control" includes the right to grant
++patent sublicenses in a manner consistent with the requirements of
++this License.
++
++  Each contributor grants you a non-exclusive, worldwide, royalty-free
++patent license under the contributor's essential patent claims, to
++make, use, sell, offer for sale, import and otherwise run, modify and
++propagate the contents of its contributor version.
++
++  In the following three paragraphs, a "patent license" is any express
++agreement or commitment, however denominated, not to enforce a patent
++(such as an express permission to practice a patent or covenant not to
++sue for patent infringement).  To "grant" such a patent license to a
++party means to make such an agreement or commitment not to enforce a
++patent against the party.
++
++  If you convey a covered work, knowingly relying on a patent license,
++and the Corresponding Source of the work is not available for anyone
++to copy, free of charge and under the terms of this License, through a
++publicly available network server or other readily accessible means,
++then you must either (1) cause the Corresponding Source to be so
++available, or (2) arrange to deprive yourself of the benefit of the
++patent license for this particular work, or (3) arrange, in a manner
++consistent with the requirements of this License, to extend the patent
++license to downstream recipients.  "Knowingly relying" means you have
++actual knowledge that, but for the patent license, your conveying the
++covered work in a country, or your recipient's use of the covered work
++in a country, would infringe one or more identifiable patents in that
++country that you have reason to believe are valid.
++
++  If, pursuant to or in connection with a single transaction or
++arrangement, you convey, or propagate by procuring conveyance of, a
++covered work, and grant a patent license to some of the parties
++receiving the covered work authorizing them to use, propagate, modify
++or convey a specific copy of the covered work, then the patent license
++you grant is automatically extended to all recipients of the covered
++work and works based on it.
++
++  A patent license is "discriminatory" if it does not include within
++the scope of its coverage, prohibits the exercise of, or is
++conditioned on the non-exercise of one or more of the rights that are
++specifically granted under this License.  You may not convey a covered
++work if you are a party to an arrangement with a third party that is
++in the business of distributing software, under which you make payment
++to the third party based on the extent of your activity of conveying
++the work, and under which the third party grants, to any of the
++parties who would receive the covered work from you, a discriminatory
++patent license (a) in connection with copies of the covered work
++conveyed by you (or copies made from those copies), or (b) primarily
++for and in connection with specific products or compilations that
++contain the covered work, unless you entered into that arrangement,
++or that patent license was granted, prior to 28 March 2007.
++
++  Nothing in this License shall be construed as excluding or limiting
++any implied license or other defenses to infringement that may
++otherwise be available to you under applicable patent law.
++
++  12. No Surrender of Others' Freedom.
++
++  If conditions are imposed on you (whether by court order, agreement or
++otherwise) that contradict the conditions of this License, they do not
++excuse you from the conditions of this License.  If you cannot convey a
++covered work so as to satisfy simultaneously your obligations under this
++License and any other pertinent obligations, then as a consequence you may
++not convey it at all.  For example, if you agree to terms that obligate you
++to collect a royalty for further conveying from those to whom you convey
++the Program, the only way you could satisfy both those terms and this
++License would be to refrain entirely from conveying the Program.
++
++  13. Remote Network Interaction; Use with the GNU General Public License.
++
++  Notwithstanding any other provision of this License, if you modify the
++Program, your modified version must prominently offer all users
++interacting with it remotely through a computer network (if your version
++supports such interaction) an opportunity to receive the Corresponding
++Source of your version by providing access to the Corresponding Source
++from a network server at no charge, through some standard or customary
++means of facilitating copying of software.  This Corresponding Source
++shall include the Corresponding Source for any work covered by version 3
++of the GNU General Public License that is incorporated pursuant to the
++following paragraph.
++
++  Notwithstanding any other provision of this License, you have
++permission to link or combine any covered work with a work licensed
++under version 3 of the GNU General Public License into a single
++combined work, and to convey the resulting work.  The terms of this
++License will continue to apply to the part which is the covered work,
++but the work with which it is combined will remain governed by version
++3 of the GNU General Public License.
++
++  14. Revised Versions of this License.
++
++  The Free Software Foundation may publish revised and/or new versions of
++the GNU Affero General Public License from time to time.  Such new versions
++will be similar in spirit to the present version, but may differ in detail to
++address new problems or concerns.
++
++  Each version is given a distinguishing version number.  If the
++Program specifies that a certain numbered version of the GNU Affero General
++Public License "or any later version" applies to it, you have the
++option of following the terms and conditions either of that numbered
++version or of any later version published by the Free Software
++Foundation.  If the Program does not specify a version number of the
++GNU Affero General Public License, you may choose any version ever published
++by the Free Software Foundation.
++
++  If the Program specifies that a proxy can decide which future
++versions of the GNU Affero General Public License can be used, that proxy's
++public statement of acceptance of a version permanently authorizes you
++to choose that version for the Program.
++
++  Later license versions may give you additional or different
++permissions.  However, no additional obligations are imposed on any
++author or copyright holder as a result of your choosing to follow a
++later version.
++
++  15. Disclaimer of Warranty.
++
++  THERE IS NO WARRANTY FOR THE PROGRAM, TO THE EXTENT PERMITTED BY
++APPLICABLE LAW.  EXCEPT WHEN OTHERWISE STATED IN WRITING THE COPYRIGHT
++HOLDERS AND/OR OTHER PARTIES PROVIDE THE PROGRAM "AS IS" WITHOUT WARRANTY
++OF ANY KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING, BUT NOT LIMITED TO,
++THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++PURPOSE.  THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE PROGRAM
++IS WITH YOU.  SHOULD THE PROGRAM PROVE DEFECTIVE, YOU ASSUME THE COST OF
++ALL NECESSARY SERVICING, REPAIR OR CORRECTION.
++
++  16. Limitation of Liability.
++
++  IN NO EVENT UNLESS REQUIRED BY APPLICABLE LAW OR AGREED TO IN WRITING
++WILL ANY COPYRIGHT HOLDER, OR ANY OTHER PARTY WHO MODIFIES AND/OR CONVEYS
++THE PROGRAM AS PERMITTED ABOVE, BE LIABLE TO YOU FOR DAMAGES, INCLUDING ANY
++GENERAL, SPECIAL, INCIDENTAL OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE
++USE OR INABILITY TO USE THE PROGRAM (INCLUDING BUT NOT LIMITED TO LOSS OF
++DATA OR DATA BEING RENDERED INACCURATE OR LOSSES SUSTAINED BY YOU OR THIRD
++PARTIES OR A FAILURE OF THE PROGRAM TO OPERATE WITH ANY OTHER PROGRAMS),
++EVEN IF SUCH HOLDER OR OTHER PARTY HAS BEEN ADVISED OF THE POSSIBILITY OF
++SUCH DAMAGES.
++
++  17. Interpretation of Sections 15 and 16.
++
++  If the disclaimer of warranty and limitation of liability provided
++above cannot be given local legal effect according to their terms,
++reviewing courts shall apply local law that most closely approximates
++an absolute waiver of all civil liability in connection with the
++Program, unless a warranty or assumption of liability accompanies a
++copy of the Program in return for a fee.
++
++                     END OF TERMS AND CONDITIONS
++
++            How to Apply These Terms to Your New Programs
++
++  If you develop a new program, and you want it to be of the greatest
++possible use to the public, the best way to achieve this is to make it
++free software which everyone can redistribute and change under these terms.
++
++  To do so, attach the following notices to the program.  It is safest
++to attach them to the start of each source file to most effectively
++state the exclusion of warranty; and each file should have at least
++the "copyright" line and a pointer to where the full notice is found.
++
++    <one line to give the program's name and a brief idea of what it does.>
++    Copyright (C) <year>  <name of author>
++
++    This program is free software: you can redistribute it and/or modify
++    it under the terms of the GNU Affero General Public License as published by
++    the Free Software Foundation, either version 3 of the License, or
++    (at your option) any later version.
++
++    This program is distributed in the hope that it will be useful,
++    but WITHOUT ANY WARRANTY; without even the implied warranty of
++    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++    GNU Affero General Public License for more details.
++
++    You should have received a copy of the GNU Affero General Public License
++    along with this program.  If not, see <https://www.gnu.org/licenses/>.
++
++Also add information on how to contact you by electronic and paper mail.
++
++  If your software can interact with users remotely through a computer
++network, you should also make sure that it provides a way for users to
++get its source.  For example, if your program is a web application, its
++interface could display a "Source" link that leads users to an archive
++of the code.  There are many ways you could offer source, and different
++solutions will be better for different programs; see section 13 for the
++specific requirements.
++
++  You should also get your employer (if you work as a programmer) or school,
++if any, to sign a "copyright disclaimer" for the program, if necessary.
++For more information on this, and how to apply and follow the GNU AGPL, see
++<https://www.gnu.org/licenses/>.
+diff --git a/README.md b/README.md
+index 7961f7b..e79b5c6 100644
+--- a/README.md
++++ b/README.md
+@@ -1,46 +1,59 @@
+-# mino-starter
++# music-vote
+ 
+-Reusable full-stack starter built **AI-first**: Bun + React + tRPC + better-auth + Prisma + daisyUI. The repo is wired so a coding agent can take a spec and ship a feature with minimal hand-holding — prescriptive `AGENTS.md`, committed placement skill, APM-managed skills + MCP, strict lint, and a one-command bootstrap.
++Crowd-voted AI live music. A host opens a room at a venue, picks a vibe, and
++the music starts playing from the host's browser into the PA. Phones join by
++scanning a QR code — no login, no app — and vote yes/no on musical directions
++("should this sound more 80s?"). Each winning answer is turned into new
++live-coded Strudel by an LLM, validated server-side, applied at the next cycle
++boundary, and the set keeps evolving until an AI outro closes it with a
++timeline of every vote that shaped the performance. The server conducts and
++owns the room state; the host browser is the audio engine; phones only vote.
+ 
+-## Quick start (fresh clone)
++## Quick start
+ 
+ ```sh
+-bun run bootstrap   # deps + APM skills/MCP + prisma generate + migrate + git hooks
+-cp .env.example .env # then fill BETTER_AUTH_SECRET etc.
++bun run bootstrap    # deps + skills/MCP + prisma generate + migrate + git hooks
++cp .env.example .env # set BETTER_AUTH_SECRET (openssl rand -base64 32)
+ bun run dev          # http://localhost:3000
+ ```
+ 
+ Requires Bun 1.4.2+ (see `.bun-version`).
+ 
+-## Working with an agent
++## Run locally with the mock LLM
+ 
+-- **Read first:** `AGENTS.md` — stack, conventions, scripts, deploy. It opens with a TL;DR for the first commands and the "add a feature" vertical-slice recipe.
+-- **Placement rules:** `.agents/skills/project-structure/SKILL.md` — where every file goes and the move verification gate.
+-- **Prior decisions:** `docs/superpowers/README.md` — index of specs + plans (brainstorm → spec → plan → implement). New work should follow the same flow.
+-- **Stack constraints:** `requirements.txt` — what to use and what **not** to use (no Vite, no Express/Hono, no npm/pnpm, no `CLAUDE.md`).
++Real generation needs an Ollama endpoint, but the whole loop is runnable
++offline with scripted responses:
++
++```sh
++# in .env
++LLM_PROVIDER=mock
++LLM_MOCK_SCRIPT=e2e/fixtures/llm-script.json
++```
++
++Then sign up, create a room, and start it. Every LLM call pops the next canned
++response from that file, so the flow is deterministic and safe for demos and
++tests. For real musicality, set `LLM_PROVIDER=ollama` and point
++`OLLAMA_BASE_URL` at a local Ollama or at `https://ollama.com` with
++`OLLAMA_API_KEY`.
++
++## Docs
++
++- **Spec:** [`docs/superpowers/specs/2026-10-01-music-vote-design.md`](docs/superpowers/specs/2026-10-01-music-vote-design.md) — product design, room lifecycle, failure table.
++- **Plan:** [`docs/superpowers/plans/2026-10-01-music-vote.md`](docs/superpowers/plans/2026-10-01-music-vote.md) — the task-by-task build.
++- **Env, deploy, ops:** [`docs/agents/music-vote.md`](docs/agents/music-vote.md) — env vars, `fly deploy`, single-machine/SQLite constraints, known limitations.
++- **Agent context:** [`AGENTS.md`](AGENTS.md) — stack, scripts, conventions; [`docs/agents/`](docs/agents/) covers commands, deployment, Prisma, bot SSR, and React Compiler in depth.
++- **Placement rules:** [`.agents/skills/project-structure/SKILL.md`](.agents/skills/project-structure/SKILL.md).
+ 
+ ## Verification
+ 
+ - `bun run check` — biome + typecheck + knip + unit tests. Run before claiming work done.
+-- `bun run check:full` — adds Playwright E2E. Run for UI/auth/route changes.
+-- `bun run premerge` — `check` then fast-forward merge → main → push.
+-
+-Git hooks (`.githooks/`, wired by `bootstrap`) run biome+typecheck at commit and the full gate at push.
+-
+-## Scripts
+-
+-- `bun run dev` — dev server with HMR
+-- `bun run build` — production bundle
+-- `bun run start` — production server
+-- `bun test` — unit tests (backend + shared + frontend)
+-- `bun run test:e2e` — Playwright E2E
+-- `bun run check:full` — `check` + `test:e2e`
+-- `bun run format` — Biome check + format (writes fixes)
+-- `bun run check` — pre-merge gate (biome + typecheck + knip + test), shared by `premerge` and CI
+-- `bun run premerge` — run `check`, then fast-forward merge current branch → main and push
+-- `bun run bootstrap` — one-command fresh-clone setup (idempotent)
+-- `bun run typecheck` — tsc --noEmit
+-- `bun run db:migrate` — prisma migrate dev
+-- `bun run db:reset` — prisma migrate reset
+-
+-See `AGENTS.md` for agent context and `apm.yml` for the skills/MCP manifest.
+\ No newline at end of file
++- `bun run check:full` — adds Playwright E2E (the full democratic-music cycle). Run for UI/auth/route changes.
++- `bun run premerge` — `check` then fast-forward merge → main and push.
++
++Git hooks (`.githooks/`, wired by `bootstrap`) run biome + typecheck at commit
++and the full gate at push.
++
++## License
++
++AGPL-3.0 — see [`LICENSE`](LICENSE). The repo is public because it embeds
++Strudel (`@strudel/web`, `@strudel/transpiler`), which is AGPL-3.0.
+diff --git a/apm.yml b/apm.yml
+index 41b4e75..1ac63f3 100644
+--- a/apm.yml
++++ b/apm.yml
+@@ -1,11 +1,11 @@
+-name: mino-starter
++name: music-vote
+ version: 0.1.0
+ targets:
+   - agent-skills
+ dependencies:
+   apm:
+     - anthropics/skills/skills/frontend-design
+     - DeckardGer/tanstack-agent-skills
+     - saadeghi/daisyui/skills/daisyui
+   mcp:
+     - io.github.microsoft/playwright-mcp
+diff --git a/backend/server.ts b/backend/server.ts
+index 77aa7d9..e95a6cb 100644
+--- a/backend/server.ts
++++ b/backend/server.ts
+@@ -129,11 +129,11 @@ const httpServer = Bun.serve<SocketData>({
+ 		},
+ 		close(ws) {
+ 			hub.onClose(ws)
+ 		},
+ 		message() {
+ 			// client -> server protocol is not used yet
+ 		},
+ 	},
+ })
+ 
+-console.log(`mino-starter on http://localhost:${httpServer.port}`)
++console.log(`music-vote on http://localhost:${httpServer.port}`)
+diff --git a/backend/trpc/public.ts b/backend/trpc/public.ts
+index 8f94ed4..489a621 100644
+--- a/backend/trpc/public.ts
++++ b/backend/trpc/public.ts
+@@ -1,11 +1,11 @@
+ import type { Context } from '@backend/trpc/context'
+ import { initTRPC } from '@trpc/server'
+ 
+ const t = initTRPC.context<Context>().create()
+ 
+ export const publicRouter = t.router({
+ 	siteInfo: t.procedure.query(() => ({
+-		name: 'mino-starter',
+-		tagline: 'A Bun + React fullstack starter with bot-friendly SSR.',
++		name: 'music-vote',
++		tagline: 'Crowd-voted AI live music.',
+ 	})),
+ })
+diff --git a/docs/agents/commands.md b/docs/agents/commands.md
+index dfd3d4d..6df4394 100644
+--- a/docs/agents/commands.md
++++ b/docs/agents/commands.md
+@@ -19,23 +19,26 @@
+ - `bun run db:reset` — `prisma migrate reset`
+ 
+ `postinstall` runs `prisma generate`.
+ 
+ ## Env vars
+ 
+ `.env.example` is the source of truth. Highlights:
+ 
+ - `DATABASE_URL` — `file:./dev.db` (dev), `file:./test.db` (E2E test DB), `file:/data/prod.db` (prod)
+ - `BETTER_AUTH_SECRET` — random, e.g. `openssl rand -base64 32`
+-- `BETTER_AUTH_URL` — e.g. `http://localhost:3000` (dev) / `https://mino-starter.fly.dev` (prod)
++- `BETTER_AUTH_URL` — e.g. `http://localhost:3000` (dev) / `https://music-vote.fly.dev` (prod)
++- `LLM_PROVIDER` / `OLLAMA_BASE_URL` / `OLLAMA_MODEL` / `OLLAMA_API_KEY` / `LLM_MOCK_SCRIPT` — LLM provider config; prod deploy + ops notes in [music-vote.md](music-vote.md)
+ - SSR prerender (optional, prod-only): `SSR_CACHE_DIR`, `LIGHTPANDA_EXECUTABLE_PATH` — see [bot-ssr.md](bot-ssr.md)
+ 
++`NODE_ENV` and `REACT_COMPILER` come from the scripts/Dockerfile rather than `.env`; `MV_E2E_FAST` is test-only (set by `playwright.config.ts`).
++
+ ## Git hooks
+ 
+ `.githooks/pre-commit` runs Biome check + typecheck. `.githooks/pre-push` runs the full `scripts/check.sh` gate. `bun run bootstrap` sets `core.hooksPath = .githooks`. Bypass with `--no-verify` only when intentionally breaking the gate.
+ 
+ ## Knip
+ 
+ Knip runs in CI and inside `bun run check`; it **fails** on unused dependencies, files, or exports. Run it after any file add/move.
+ 
+ ## Skills / MCP
+ 
+diff --git a/docs/agents/conventions.md b/docs/agents/conventions.md
+index 501d668..700471d 100644
+--- a/docs/agents/conventions.md
++++ b/docs/agents/conventions.md
+@@ -3,44 +3,44 @@
+ ## Stack
+ 
+ - Frontend: React 19 SPA, TanStack Router, TanStack Query, TanStack Form, tRPC (`@trpc/tanstack-react-query`), daisyUI v5 + Tailwind v4
+ - Backend: `Bun.serve` fullstack server, tRPC v11 fetch adapter, better-auth (Prisma adapter, email/password only)
+ - Lint/format: Biome; E2E: Playwright
+ 
+ ## TypeScript / files
+ 
+ - TypeScript/TSX/config filenames: kebab-case (`note-list.tsx`, not `NoteList.tsx`). React component identifiers stay PascalCase; only file names are kebab-case.
+ - No vendor-specific instruction filenames (e.g. `CLAUDE.md`) — use `AGENTS.md`.
+-- Biome `noChildrenProp` is disabled for `frontend/components/note-form.tsx` and `frontend/components/auth-form.tsx` (TanStack Form's `form.Field`/`form.Subscribe` use a children render-prop).
++- Biome `noChildrenProp` is disabled for `frontend/components/auth-form.tsx` (TanStack Form's `form.Field`/`form.Subscribe` use a children render-prop).
+ - Placement rules + move verification gate live in `.agents/skills/project-structure/SKILL.md` — see [vertical-slices.md](vertical-slices.md).
+ 
+ ## Client state
+ 
+ - Local UI state: React `useState`/`useReducer`.
+ - Server state stays in TanStack Query — don't duplicate.
+ - If shared client state becomes necessary later: add a single Zustand store under `frontend/stores/` with a `createStore()` factory wrapping `devtools` middleware.
+ 
+ ## Forms
+ 
+ TanStack Form (`useForm`) with Zod schemas passed directly to `validators` (Standard Schema native support — no `@tanstack/zod-form-adapter`). Render fields via `form.Field` render-prop and submit state via `form.Subscribe`.
+ 
+ ## Shared schemas
+ 
+-Shared validation schemas live in `shared/schemas/` — single source of truth, reused by both frontend form `validators` and backend tRPC `input(...)`. Example: `noteSchema` in `shared/schemas/note.ts`, consumed by `backend/trpc/notes.ts`.
++Shared validation schemas live in `shared/schemas/` — single source of truth, reused by both frontend form `validators` and backend tRPC `input(...)`. Example: `createRoomSchema` in `shared/schemas/room.ts`, consumed by `backend/trpc/rooms.ts`.
+ 
+ ## Devtools
+ 
+ Unified TanStack devtools shell at `frontend/components/devtools.tsx`, mounted once in `main.tsx`. Panels: Query, Router, Form.
+ 
+ - Dev-only: gated on `process.env.NODE_ENV` (Bun folds it; `import.meta.env` is **not** shimmed in the browser bundle and will throw) + lazy `import()`.
+ - Prod exclusion: Bun's bundler does not tree-shake dead dynamic imports, so `scripts/build.ts` registers a `Bun.build` plugin that redirects the four `@tanstack/*-devtools` packages to a no-op stub (`frontend/components/devtools-stub.ts`) — keeps ~270KB out of the prod JS.
+ 
+ ## Build internals
+ 
+ `scripts/build.ts` bundles with `Bun.build` using `publicPath: "/"` so hashed JS/CSS links are root-relative and work on all SPA routes; Tailwind CSS compiles via `scripts/prod-css.ts`. React Compiler details: [react-compiler.md](react-compiler.md).
+ 
+ ## Wiring / endpoints
+ 
+ - Auth base path: `/api/auth` (configured in `backend/auth/auth.ts`)
+ - tRPC endpoint: `/api/trpc` (configured in `backend/server.ts`)
+-- SPA client routes: `/`, `/login`, `/notes`
++- SPA client routes: `/`, `/login`, `/create`, `/r/$id` (vote), `/r/$id/host`
+ - `Context` type flows from `backend/trpc/context.ts` → `backend/trpc/root.ts` → `shared/trpc.ts` → `frontend/lib/trpc.ts`
+\ No newline at end of file
+diff --git a/docs/agents/deployment.md b/docs/agents/deployment.md
+index 0709e11..9736ad3 100644
+--- a/docs/agents/deployment.md
++++ b/docs/agents/deployment.md
+@@ -1,22 +1,22 @@
+ # Deployment (Fly.io)
+ 
+-Target: app `mino-starter` on Fly.io. Infra files live in repo: `Dockerfile` (multi-stage Bun build) + `fly.toml` (app, volume mount, http_service).
++Target: app `music-vote` on Fly.io. Infra files live in repo: `Dockerfile` (multi-stage Bun build) + `fly.toml` (app, volume mount, http_service). Product-level env, deploy commands, and ops notes live in [music-vote.md](music-vote.md).
+ 
+ - **Image**: `Dockerfile` — build stage installs deps, runs `prisma generate`, bundles frontend to `dist/`, compiles CSS; runtime stage copies `node_modules`/`dist`/`backend`/`shared`/`prisma`/`prisma.config.ts`, sets `DATABASE_URL=file:/data/prod.db` + `PORT=3000`, and runs `./node_modules/.bin/prisma migrate deploy && bun run backend/server.ts` on boot (migrations are idempotent, safe to run every start). Prisma CLI runs under Bun in the `oven/bun` image.
+-- **SQLite persistence**: Fly volume `mino_starter_data` mounted at `/data` (see `fly.toml` `[mount]`). `prod.db` lives there and survives deploys and scale-to-zero. Lost only if the volume is deleted. SQLite volume is local to one machine — do **not** scale `>1` machine (no shared FS).
++- **SQLite persistence**: Fly volume `music_vote_data` mounted at `/data` (see `fly.toml` `[mount]`). `prod.db` lives there and survives deploys and scale-to-zero. Lost only if the volume is deleted. SQLite volume is local to one machine — do **not** scale `>1` machine (no shared FS).
+ - **VM**: `shared-cpu-1x` with 512MB RAM (see `fly.toml` `[[vm]]`). Fits because Prisma's Rust query engine is gone — the `prisma-adapter-bun-sqlite` driver uses Bun's native `bun:sqlite`.
+ - **Auto-stop**: `auto_stop_machines = true`, `min_machines_running = 0` → app sleeps when idle, wakes on request. Volume persists across stop/start.
+-- **Secrets** (set via `flyctl secrets set`): `BETTER_AUTH_SECRET` (random, `openssl rand -base64 32`), `BETTER_AUTH_URL=https://mino-starter.fly.dev`, `NODE_ENV=production`. `DATABASE_URL` is baked into the Dockerfile env, not a secret.
++- **Secrets** (set via `flyctl secrets set`): `BETTER_AUTH_SECRET` (random, `openssl rand -base64 32`), `BETTER_AUTH_URL=https://music-vote.fly.dev`, `NODE_ENV=production`. `DATABASE_URL` is baked into the Dockerfile env, not a secret.
+ - **First deploy** (new app):
+   ```sh
+   flyctl auth login
+-  flyctl apps create mino-starter
+-  flyctl volumes create mino_starter_data --size 1   # pick region or omit for nearest
++  flyctl apps create music-vote
++  flyctl volumes create music_vote_data --size 1   # pick region or omit for nearest
+   flyctl secrets set BETTER_AUTH_SECRET=$(openssl rand -base64 32) \
+-    BETTER_AUTH_URL=https://mino-starter.fly.dev NODE_ENV=production
++    BETTER_AUTH_URL=https://music-vote.fly.dev NODE_ENV=production
+   flyctl deploy
+   ```
+ - **Redeploy** (update code, keep data): `flyctl deploy`.
+-- **Replace an existing app** (fresh state, wipes data): `flyctl apps destroy mino-starter` then run the first-deploy steps. The volume must be recreated.
+-- **Open**: `flyctl apps open` → `https://mino-starter.fly.dev`.
++- **Replace an existing app** (fresh state, wipes data): `flyctl apps destroy music-vote` then run the first-deploy steps. The volume must be recreated.
++- **Open**: `flyctl apps open` → `https://music-vote.fly.dev`.
+ - **Caveats**: single-machine only (SQLite volume). `better-auth` sessions rely on `BETTER_AUTH_SECRET` — rotating it logs out all users. Devtools are dev-only and excluded from the prod bundle via the `scripts/build.ts` stub plugin.
+\ No newline at end of file
+diff --git a/docs/agents/music-vote.md b/docs/agents/music-vote.md
+new file mode 100644
+index 0000000..7376517
+--- /dev/null
++++ b/docs/agents/music-vote.md
+@@ -0,0 +1,125 @@
++# music-vote — Env, Deploy, Ops
++
++Product-level runbook for the deployed app. Design + failure behavior live in
++[the spec](../superpowers/specs/2026-10-01-music-vote-design.md); generic Fly
++plumbing (Dockerfile, VM sizing, migrations-on-boot) lives in
++[deployment.md](deployment.md).
++
++## Process shape
++
++One Bun process (`backend/server.ts`) serves everything on one port: the SPA
++shell + hashed assets, tRPC (`/api/trpc`), better-auth (`/api/auth`), the
++WebSocket upgrade (`/ws`), and prod-only bot prerender. The server is the
++conductor and single source of truth for room state (Prisma/SQLite); the **host
++browser is the audio engine** (`@strudel/web`); phones are vote buttons with no
++login. LLM calls happen server-side only — API keys never reach a browser.
++
++## Env vars
++
++`.env.example` mirrors this list; the code is the source of truth.
++
++| Var | Required | Default | Notes |
++|---|---|---|---|
++| `DATABASE_URL` | prod | `file:./dev.db` | Prod is baked into the Dockerfile (`file:/data/prod.db`), not a secret. |
++| `BETTER_AUTH_SECRET` | yes | — | `openssl rand -base64 32`. Rotating it logs out every user. |
++| `BETTER_AUTH_URL` | yes | — | `http://localhost:3000` dev / `https://music-vote.fly.dev` prod. |
++| `PORT` | no | `3000` | Must match `fly.toml` `internal_port`. |
++| `LLM_PROVIDER` | no | `ollama` | `ollama` or `mock`. Anything else throws at first LLM call. |
++| `OLLAMA_BASE_URL` | no | `http://localhost:11434` | Local Ollama in dev; `https://ollama.com` for cloud in prod. |
++| `OLLAMA_MODEL` | yes (ollama) | — | Model tag, e.g. `llama3.1`. Missing → `OLLAMA_MODEL is required`. |
++| `OLLAMA_API_KEY` | no | — | Sent as `Authorization: Bearer <key>`. Ollama cloud key → Fly secret. |
++| `LLM_MOCK_SCRIPT` | yes (mock) | — | Path to `{ "responses": string[] }`; responses are popped in order and the provider throws when exhausted, so tests never hit a real model. |
++| `SSR_CACHE_DIR` | no | `mkdtemp` dir | Bot-prerender HTML cache — see [bot-ssr.md](bot-ssr.md). |
++| `LIGHTPANDA_EXECUTABLE_PATH` | no | `~/.cache/lightpanda-node/lightpanda` | Prod sets it in the Dockerfile. Leave it unset rather than empty — an empty assignment is passed through as an empty path and silently disables bot prerender. |
++| `MV_E2E_FAST` | test-only | — | `1` shrinks the poll open window to 5s and clamps the interval minimum to 10s (`backend/polls/scheduler.ts`). Set by `playwright.config.ts` only. |
++
++## Local run with the mock LLM
++
++```sh
++bun run bootstrap                 # deps + skills/MCP + prisma generate + migrate + hooks
++cp .env.example .env              # set BETTER_AUTH_SECRET
++# in .env:
++#   LLM_PROVIDER=mock
++#   LLM_MOCK_SCRIPT=e2e/fixtures/llm-script.json
++bun run dev                       # http://localhost:3000
++```
++
++Real musicality needs a real provider: point `OLLAMA_BASE_URL` at a local Ollama
++(`ollama serve`, `OLLAMA_MODEL=llama3.1`) or at `https://ollama.com` with
++`OLLAMA_API_KEY`. Nothing in CI tests that — the model choice is not
++automatable, so it stays a manual check.
++
++## Deploy (Fly.io)
++
++App `music-vote`, volume `music_vote_data` mounted at `/data` (see `fly.toml`).
++
++```sh
++fly auth login
++fly apps create music-vote
++fly volumes create music_vote_data --size 1        # one region; omit --region for nearest
++fly secrets set \
++  BETTER_AUTH_SECRET=$(openssl rand -base64 32) \
++  BETTER_AUTH_URL=https://music-vote.fly.dev \
++  OLLAMA_BASE_URL=https://ollama.com \
++  OLLAMA_API_KEY=<ollama-cloud-key> \
++  OLLAMA_MODEL=llama3.1
++fly deploy
++fly apps open
++```
++
++`fly.toml` carries non-secret config only, so the Ollama endpoint and model are
++set as Fly env/secrets at deploy time (`LLM_PROVIDER` defaults to `ollama`).
++Redeploy after code changes: `fly deploy`. Migrations run on every boot
++(`migrate deploy`, idempotent).
++
++## Ops notes
++
++- **One machine, forever.** SQLite lives on a local Fly volume — there is no
++  shared filesystem. Never `fly scale count >1` and never add a second region:
++  two machines would each see a different partial DB. Scaling out later means
++  room→machine assignment, which is explicitly out of scope.
++- **WebSockets over `[http_service]`.** `/ws` is upgraded inside `Bun.serve`
++  (a `routes` entry in dev, the `fetch` handler in prod) and rides the same
++  `internal_port = 3000` as HTTP; no extra Fly flag or second service is
++  needed. The app sends no application-level ping, and a host channel can sit
++  idle for a whole poll interval, so do not add proxy settings that close idle
++  sockets aggressively — a dropped socket means the host's music stops until
++  the client reconnects (it retries with capped backoff and re-applies
++  `currentCode`). Verify a deploy by opening a host page and watching it hold
++  the connection across at least one poll interval.
++- **Scale-to-zero is safe for data, not for a live set.** `auto_stop_machines`
++  with `min_machines_running = 0` sleeps the app when idle; `/data` survives
++  stop/start and wake-on-request adds a cold-start delay before the first vote
++  lands. An open room holds WebSocket connections, which keeps the machine
++  awake.
++- **Server restart mid-set.** `PollScheduler` rebuilds timers from the DB
++  (polls are timestamped, not tick-based): an overdue poll closes with no
++  change, and the host browser reconnects and re-applies `currentCode`.
++- **LLM down / slow.** Polls keep running from the pre-generated question
++  queue; music freezes at the last-good pattern and the host page surfaces a
++  warning. The host is told, the show keeps going.
++- **Invalid codegen** (twice) or a failed browser sandbox eval → no change is
++  applied, the last-good pattern keeps playing, the poll closes normally and
++  the failure is logged.
++- **Deploy freshness.** `NODE_ENV=production` is set in the Dockerfile; without
++  it the SPA shell is served unbundled from the dev server path. The build must
++  produce `dist/` (`bun run build`) — `fly deploy` builds from the Dockerfile.
++
++## Known limitations
++
++- **Host disconnect = music stops.** The host browser *is* the audio engine
++  (`@strudel/web`); if it closes or loses its socket, the venue goes silent.
++  The room state survives on the server and the host can reconnect, but
++  playback is not restored to the exact phase — the current pattern restarts.
++- **Venue wifi and samples.** `@strudel/web` ships no offline sound bank. Init
++  registers `github:tidalcycles/dirt-samples` and the browser lazily fetches
++  each sample file on first use; only a core drum set (`bd`, `sd`, `cp`, `hh`)
++  is warmed at startup. On bad venue wifi a freshly voted pattern that
++  introduces new sounds can be silent for its first cycle. No fix short of
++  bundling samples (not viable at ~170 MB).
++- **Audio needs a gesture.** The AudioContext resumes on the first
++  click/touch; keyboard-only activation will leave the host page silent.
++- **One player per page.** Strudel is a single global engine, so exactly one
++  host player may be mounted at a time — unmounting calls `hush()`.
++- **Phones never hear audio.** Voting only; the sound comes from the host
++  machine into the PA.
+diff --git a/e2e/ssr.spec.ts b/e2e/ssr.spec.ts
+index b80903f..92126ea 100644
+--- a/e2e/ssr.spec.ts
++++ b/e2e/ssr.spec.ts
+@@ -5,22 +5,20 @@ const BOT_UA =
+ const BROWSER_UA =
+ 	'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+ 
+ test('bot gets rendered HTML; browser gets the raw SPA shell', async ({
+ 	request,
+ }) => {
+ 	// Bot → lightpanda renders the SPA, tagline is in the DOM.
+ 	const bot = await request.get('/', { headers: { 'user-agent': BOT_UA } })
+ 	expect(bot.headers()['content-type'] ?? '').toContain('text/html')
+ 	const botBody = await bot.text()
+-	expect(botBody).toContain(
+-		'A Bun + React fullstack starter with bot-friendly SSR.',
+-	)
++	expect(botBody).toContain('Crowd-voted AI live music.')
+ 
+ 	// Browser → raw SPA shell, #root empty, no rendered content.
+ 	const browser = await request.get('/', {
+ 		headers: { 'user-agent': BROWSER_UA },
+ 	})
+ 	const browserBody = await browser.text()
+ 	expect(browserBody).toContain('<div id="root"></div>')
+-	expect(browserBody).not.toContain('bot-friendly SSR')
++	expect(browserBody).not.toContain('Crowd-voted AI live music.')
+ })
+diff --git a/fly.toml b/fly.toml
+index 4150021..433ed27 100644
+--- a/fly.toml
++++ b/fly.toml
+@@ -1,19 +1,19 @@
+-app = "mino-starter"
++app = "music-vote"
+ primary_region = "ams"
+ 
+ [build]
+ 
+ [mount]
+-source = "mino_starter_data"
++source = "music_vote_data"
+ destination = "/data"
+ 
+ [http_service]
+ internal_port = 3000
+ force_https = true
+ auto_stop_machines = true
+ auto_start_machines = true
+ min_machines_running = 0
+ 
+ [[vm]]
+ size = "shared-cpu-1x"
+-memory = "512mb"
+\ No newline at end of file
++memory = "512mb"
+diff --git a/frontend/components/sidebar.tsx b/frontend/components/sidebar.tsx
+index b6034fc..16a8744 100644
+--- a/frontend/components/sidebar.tsx
++++ b/frontend/components/sidebar.tsx
+@@ -3,21 +3,21 @@ import { Link } from '@tanstack/react-router'
+ 
+ export function Sidebar() {
+ 	const { data: session } = authClient.useSession()
+ 	const user = session?.user
+ 	const signedIn = Boolean(user)
+ 
+ 	return (
+ 		<div className="flex h-full flex-col gap-4 bg-base-200 p-4">
+ 			<a href="/" className="flex items-center gap-2.5 px-2 pt-1">
+ 				<span className="wordmark">
+-					mino-starter
++					music-vote
+ 					<span className="wordmark-cursor" aria-hidden="true" />
+ 				</span>
+ 			</a>
+ 
+ 			<ul className="menu w-full flex-1 gap-1 px-0">
+ 				<li>
+ 					<Link
+ 						to="/"
+ 						activeProps={{ className: 'menu-active' }}
+ 						activeOptions={{ exact: true }}
+diff --git a/frontend/index.html b/frontend/index.html
+index 0a16bca..94b3a78 100644
+--- a/frontend/index.html
++++ b/frontend/index.html
+@@ -1,13 +1,13 @@
+ <!doctype html>
+ <html lang="en">
+   <head>
+     <meta charset="utf-8" />
+     <meta name="viewport" content="width=device-width, initial-scale=1" />
+-    <title>mino-starter</title>
++    <title>music-vote</title>
+     <link rel="stylesheet" href="./app.css" />
+   </head>
+   <body>
+     <div id="root"></div>
+     <script type="module" src="./main.tsx"></script>
+   </body>
+ </html>
+diff --git a/frontend/routes/home.tsx b/frontend/routes/home.tsx
+index 9f3cc52..3320bba 100644
+--- a/frontend/routes/home.tsx
++++ b/frontend/routes/home.tsx
+@@ -3,19 +3,19 @@ import { useTRPC } from '@frontend/lib/trpc'
+ import { useQuery } from '@tanstack/react-query'
+ 
+ export function HomeRoute() {
+ 	const trpc = useTRPC()
+ 	const { data, isPending } = useQuery(trpc.public.siteInfo.queryOptions())
+ 	return (
+ 		<AppLayout>
+ 			<div className="flex max-w-md flex-col gap-4">
+ 				<div className="flex flex-col gap-1">
+ 					<span className="eyebrow">home</span>
+-					<h1 className="font-bold text-3xl">{data?.name ?? 'mino-starter'}</h1>
++					<h1 className="font-bold text-3xl">{data?.name ?? 'music-vote'}</h1>
+ 				</div>
+ 				<p className="opacity-80">
+ 					{isPending ? 'Loading…' : (data?.tagline ?? '')}
+ 				</p>
+ 			</div>
+ 		</AppLayout>
+ 	)
+ }
+diff --git a/scripts/bootstrap.sh b/scripts/bootstrap.sh
+index 68b795f..3f45a4e 100755
+--- a/scripts/bootstrap.sh
++++ b/scripts/bootstrap.sh
+@@ -1,12 +1,12 @@
+ #!/usr/bin/env bash
+-# One-command setup for a fresh clone of mino-starter.
++# One-command setup for a fresh clone of music-vote.
+ # Idempotent — safe to re-run.
+ #
+ # Installs Bun deps, APM skills + MCP, generates the Prisma client,
+ # applies migrations, and wires the checked-in git hooks.
+ set -euo pipefail
+ 
+ cd "$(dirname "$0")/.."
+ 
+ step() { printf '\n\033[1m→ %s\033[0m\n' "$*"; }
+ 

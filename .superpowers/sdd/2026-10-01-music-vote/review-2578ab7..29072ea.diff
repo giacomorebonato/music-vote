@@ -1,0 +1,223 @@
+# Review package: 2578ab7..29072ea
+
+## Commits
+29072ea fix(votes): per-option vote_count counts
+
+## Files changed
+ backend/realtime/__tests__/hub.test.ts  |  6 ++----
+ backend/votes/__tests__/service.test.ts | 30 +++++++++++++++++++++++++++---
+ backend/votes/service.ts                | 21 +++++++++++----------
+ shared/realtime/events.ts               |  3 +--
+ 4 files changed, 41 insertions(+), 19 deletions(-)
+
+## Diff
+diff --git a/backend/realtime/__tests__/hub.test.ts b/backend/realtime/__tests__/hub.test.ts
+index 354ed20..cc8de5b 100644
+--- a/backend/realtime/__tests__/hub.test.ts
++++ b/backend/realtime/__tests__/hub.test.ts
+@@ -124,31 +124,29 @@ test('host and audience sockets receive only their channel events', async () =>
+ 			closesAt: '2026-10-01T00:00:00.000Z',
+ 		},
+ 	})
+ 	await new Promise((resolve) => setTimeout(resolve, 20))
+ 	expect(audienceMessages).toHaveLength(1)
+ 	expect(hostMessages).toHaveLength(0)
+ 
+ 	hub.publishHost('room-a', {
+ 		type: 'vote_count',
+ 		pollId: 'poll-1',
+-		yes: 3,
+-		no: 1,
++		counts: { yes: 3, no: 1 },
+ 	})
+ 	await new Promise((resolve) => setTimeout(resolve, 20))
+ 	expect(audienceMessages).toHaveLength(1)
+ 	expect(hostMessages).toHaveLength(1)
+ 	expect(hostMessages[0]).toEqual({
+ 		type: 'vote_count',
+ 		pollId: 'poll-1',
+-		yes: 3,
+-		no: 1,
++		counts: { yes: 3, no: 1 },
+ 	})
+ 
+ 	audienceWs.close()
+ 	hostWs.close()
+ 	await Promise.all([waitForClose(audienceWs), waitForClose(hostWs)])
+ 	server.stop(true)
+ })
+ 
+ test('nonexistent room join is rejected and connection closed', async () => {
+ 	const resolveRole: RoleResolver = async () => ({
+diff --git a/backend/votes/__tests__/service.test.ts b/backend/votes/__tests__/service.test.ts
+index 5d48b2e..482b88a 100644
+--- a/backend/votes/__tests__/service.test.ts
++++ b/backend/votes/__tests__/service.test.ts
+@@ -209,39 +209,63 @@ test('a second vote from the same session surfaces ALREADY_VOTED and inserts onc
+ 	})
+ 
+ 	await service.castVote(poll.id, 'token-a', 'yes')
+ 
+ 	await expect(service.castVote(poll.id, 'token-a', 'no')).rejects.toThrow(
+ 		/ALREADY_VOTED/,
+ 	)
+ 	expect(await prisma.vote.count({ where: { pollId: poll.id } })).toBe(1)
+ })
+ 
+-test('a successful vote pushes vote_count with the DB yes/no counts', async () => {
++test('a successful vote pushes vote_count with the DB per-option counts', async () => {
+ 	const room = await makeRoom()
+ 	const poll = await makePoll(room.id, {
+ 		status: 'open',
+ 		closesAt: new Date(Date.now() + 60_000),
+ 	})
+ 
+ 	await service.castVote(poll.id, 'token-a', 'yes')
+ 	await service.castVote(poll.id, 'token-b', 'no')
+ 	await service.castVote(poll.id, 'token-c', 'yes')
+ 
+ 	const events = hubSpies.publishHost.mock.calls as [string, WsEvent][]
+ 	expect(events.at(-1)?.[0]).toBe(room.id)
+ 	expect(events.at(-1)?.[1]).toEqual({
+ 		type: 'vote_count',
+ 		pollId: poll.id,
+-		yes: 2,
+-		no: 1,
++		counts: { yes: 2, no: 1 },
+ 	})
++	expect(hubSpies.publishAudience).not.toHaveBeenCalled()
++})
++
++test('an end-style poll pushes wrap/continue counts, not yes/no zeroes', async () => {
++	const room = await makeRoom()
++	const poll = await makePoll(room.id, {
++		status: 'open',
++		closesAt: new Date(Date.now() + 60_000),
++		options: [
++			{ key: 'wrap', label: 'Wrap it up' },
++			{ key: 'continue', label: 'Keep going' },
++		],
++	})
++
++	await service.castVote(poll.id, 'token-a', 'wrap')
++	await service.castVote(poll.id, 'token-b', 'continue')
++	await service.castVote(poll.id, 'token-c', 'wrap')
++
++	const events = hubSpies.publishHost.mock.calls as [string, WsEvent][]
++	expect(events.at(-1)?.[1]).toEqual({
++		type: 'vote_count',
++		pollId: poll.id,
++		counts: { wrap: 2, continue: 1 },
++	})
++	expect(hubSpies.publishAudience).not.toHaveBeenCalled()
+ })
+ 
+ test('currentPoll returns null poll with lobby roomStatus', async () => {
+ 	const room = await makeRoom('lobby')
+ 	const caller = votingRouter.createCaller(callerCtx())
+ 
+ 	const result = await caller.currentPoll({ roomId: room.id })
+ 
+ 	expect(result).toEqual({ poll: null, roomStatus: 'lobby' })
+ })
+diff --git a/backend/votes/service.ts b/backend/votes/service.ts
+index ae224b3..70e2d69 100644
+--- a/backend/votes/service.ts
++++ b/backend/votes/service.ts
+@@ -22,21 +22,21 @@ export function claimSession(): { token: string } {
+ 	return { token: crypto.randomUUID() }
+ }
+ 
+ /**
+  * Record an audience vote for an open poll.
+  *
+  * Rejects polls that are not `open` or whose `closesAt` has passed (server
+  * time), and choices outside the poll's option keys, so the scheduler's
+  * in-option tally never has to discard a row. Duplicate `(pollId, token)`
+  * maps to a friendly ALREADY_VOTED error. After a successful insert the
+- * current DB yes/no counts are pushed to the host.
++ * current DB counts per option are pushed to the host.
+  */
+ export async function castVote(
+ 	pollId: string,
+ 	token: string,
+ 	choice: string,
+ ): Promise<void> {
+ 	const poll = await prisma.poll.findUnique({ where: { id: pollId } })
+ 	if (!poll) {
+ 		throw new TRPCError({ code: 'NOT_FOUND', message: 'Poll not found' })
+ 	}
+@@ -59,35 +59,36 @@ export async function castVote(
+ 	} catch (error) {
+ 		if (
+ 			error instanceof Prisma.PrismaClientKnownRequestError &&
+ 			error.code === 'P2002'
+ 		) {
+ 			throw new TRPCError({ code: 'CONFLICT', message: 'ALREADY_VOTED' })
+ 		}
+ 		throw error
+ 	}
+ 
+-	const counts = await countVotes(pollId)
++	const counts = await countVotes(pollId, options)
+ 	hub.publishHost(poll.roomId, {
+ 		type: 'vote_count',
+ 		pollId,
+-		yes: counts.yes,
+-		no: counts.no,
++		counts,
+ 	})
+ }
+ 
+ async function countVotes(
+ 	pollId: string,
+-): Promise<{ yes: number; no: number }> {
++	options: PollOption[],
++): Promise<Record<string, number>> {
++	const counts: Record<string, number> = {}
++	for (const option of options) {
++		counts[option.key] = 0
++	}
+ 	const rows = await prisma.vote.groupBy({
+ 		by: ['choice'],
+ 		where: { pollId },
+ 		_count: { choice: true },
+ 	})
+-	let yes = 0
+-	let no = 0
+ 	for (const row of rows) {
+-		if (row.choice === 'yes') yes = row._count.choice
+-		else if (row.choice === 'no') no = row._count.choice
++		if (row.choice in counts) counts[row.choice] = row._count.choice
+ 	}
+-	return { yes, no }
++	return counts
+ }
+diff --git a/shared/realtime/events.ts b/shared/realtime/events.ts
+index 8f14594..5e18c29 100644
+--- a/shared/realtime/events.ts
++++ b/shared/realtime/events.ts
+@@ -34,22 +34,21 @@ export type CodeUpdateEvent = {
+ 	type: 'code_update'
+ 	code: string
+ 	versionId: string
+ 	kind: 'initial' | 'evolution' | 'undo' | 'outro'
+ }
+ 
+ /** @public */
+ export type VoteCountEvent = {
+ 	type: 'vote_count'
+ 	pollId: string
+-	yes: number
+-	no: number
++	counts: Record<string, number>
+ }
+ 
+ /** @public */
+ export type RoomStatusEvent = {
+ 	type: 'room_status'
+ 	status: string
+ }
+ 
+ /** @public */
+ export type WarningEvent = {
