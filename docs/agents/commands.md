@@ -20,11 +20,17 @@
 
 `postinstall` runs `prisma generate`.
 
+### Test databases
+
+Each DB-backed unit test file owns and migrates its own SQLite file at module load — `prisma/models-test.db`, `prisma/rooms-test.db`, `prisma/scheduler-test.db`, `prisma/votes-test.db`. They must never share one: `bun test --parallel` runs the files in separate worker processes, and two `prisma migrate deploy` runs against the same fresh SQLite file deadlock (`database is locked`) and leave it schema-less, so a cold checkout fails the gate. `prisma/test.db` belongs to the Playwright suites alone (`scripts/e2e-reset-db.sh`); the unit tests never touch it.
+
+Run the gate (`bun run check`) — or `bun run test --parallel` — for unit tests. A **bare** `bun test` (Bun 1.4.2's default, non-isolated mode) fails ~42 DB/mock tests for pre-existing reasons unrelated to product code: `mock.module` is process-global and leaks between files, and the shared Prisma client gets built against `.env`'s `dev.db`. Those failures are a harness artifact — do not "fix" them by weakening tests. `--isolate` is CLI-only in 1.4.2; `[test] isolate` / `[test] parallel` in `bunfig.toml` are ignored.
+
 ## Env vars
 
 `.env.example` is the source of truth. Highlights:
 
-- `DATABASE_URL` — `file:./dev.db` (dev), `file:./test.db` (E2E test DB), `file:/data/prod.db` (prod)
+- `DATABASE_URL` — `file:./dev.db` (dev), `file:./test.db` (E2E test DB), `file:/data/prod.db` (prod); unit tests override it per file (see [Test databases](#test-databases))
 - `BETTER_AUTH_SECRET` — random, e.g. `openssl rand -base64 32`
 - `BETTER_AUTH_URL` — e.g. `http://localhost:3000` (dev) / `https://music-vote.fly.dev` (prod)
 - `LLM_PROVIDER` / `OLLAMA_BASE_URL` / `OLLAMA_MODEL` / `OLLAMA_API_KEY` / `LLM_MOCK_SCRIPT` — LLM provider config; prod deploy + ops notes in [music-vote.md](music-vote.md)
