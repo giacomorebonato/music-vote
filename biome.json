@@ -1,0 +1,154 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.5.9/schema.json",
+	"files": {
+		"includes": [
+			"**",
+			"!.pi-subagents",
+			"!.superpowers",
+			"!dist",
+			"!prisma/generated",
+			"!test-results",
+			"!node_modules"
+		],
+		"ignoreUnknown": true
+	},
+	"javascript": {
+		"formatter": {
+			"semicolons": "asNeeded",
+			"trailingCommas": "all",
+			"quoteStyle": "single"
+		}
+	},
+	"assist": {
+		"actions": {
+			"source": {
+				"organizeImports": "on"
+			}
+		}
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"preset": "recommended",
+			"complexity": {
+				"noExcessiveCognitiveComplexity": {
+					"level": "warn",
+					"options": {
+						"maxAllowedComplexity": 10
+					}
+				},
+				"noExcessiveLinesPerFunction": "warn",
+				"noForEach": "warn",
+				"noUselessCatch": "error",
+				"noUselessConstructor": "error",
+				"useMaxParams": {
+					"level": "warn",
+					"options": {
+						"max": 4
+					}
+				}
+			},
+			"correctness": {
+				"noUnusedFunctionParameters": "error",
+				"useExhaustiveDependencies": "warn",
+				"useHookAtTopLevel": "error",
+				"useYield": "error"
+			},
+			"suspicious": {
+				"noCommentText": "warn",
+				"noConsole": "error",
+				"noEvolvingTypes": "error",
+				"noExplicitAny": "error",
+				"noImplicitAnyLet": "error",
+				"noShadow": "error",
+				"noTsIgnore": "error",
+				"noUnsafeDeclarationMerging": "error"
+			},
+			"style": {
+				"noNonNullAssertion": "error",
+				"noNestedTernary": "error",
+				"noParameterAssign": "error",
+				"useConst": "error",
+				"useFilenamingConvention": {
+					"level": "error",
+					"options": {
+						"filenameCases": ["kebab-case"],
+						"requireAscii": true
+					}
+				},
+				"useImportType": "error",
+				"useNamingConvention": {
+					"level": "error",
+					"options": {
+						"strictCase": false
+					}
+				}
+			},
+			"nursery": {
+				"noFloatingPromises": "error",
+				"useAwaitThenable": "error",
+				"useExplicitReturnType": "warn",
+				"useReactCompiler": "warn",
+				"useSortedClasses": "error",
+				"useThisInClassMethods": "error"
+			}
+		}
+	},
+	"overrides": [
+		{
+			"includes": ["**/*.ts", "**/*.tsx"],
+			"linter": {
+				"rules": {
+					"style": {
+						"noDefaultExport": "error"
+					}
+				}
+			}
+		},
+		{
+			"includes": ["frontend/components/auth-form.tsx"],
+			"linter": {
+				"rules": {
+					"correctness": {
+						"noChildrenProp": "off"
+					}
+				}
+			}
+		},
+		{
+			"includes": [
+				"e2e/**/*.ts",
+				"playwright.config.ts",
+				"playwright.ssr.config.ts",
+				"prisma.config.ts"
+			],
+			"linter": {
+				"rules": {
+					"style": {
+						"noDefaultExport": "off"
+					}
+				}
+			}
+		},
+		{
+			"includes": [
+				"scripts/**",
+				"backend/server.ts",
+				"backend/ssr/**",
+				"**/__tests__/**"
+			],
+			"linter": {
+				"rules": {
+					"suspicious": {
+						"noConsole": "off"
+					}
+				}
+			}
+		}
+	],
+	"css": {
+		"parser": {
+			"tailwindDirectives": true
+		}
+	}
+}

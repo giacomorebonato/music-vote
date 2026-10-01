@@ -1,0 +1,64 @@
+{
+	"name": "music-vote",
+	"type": "module",
+	"private": true,
+	"engines": {
+		"bun": ">=1.4.2"
+	},
+	"scripts": {
+		"dev": "bun --hot backend/server.ts",
+		"build": "bun run scripts/build.ts",
+		"start": "NODE_ENV=production bun backend/server.ts",
+		"test": "bun test backend shared frontend",
+		"test:e2e": "playwright test",
+		"check:full": "bash scripts/check.sh && bun run test:e2e",
+		"test:e2e:ssr": "playwright test --config=playwright.ssr.config.ts",
+		"format": "biome check --write .",
+		"typecheck": "tsc --noEmit",
+		"knip": "knip",
+		"check": "bash scripts/check.sh",
+		"bootstrap": "bash scripts/bootstrap.sh",
+		"premerge": "bash scripts/premerge.sh",
+		"db:migrate": "prisma migrate dev && prisma generate",
+		"db:reset": "prisma migrate reset",
+		"postinstall": "prisma generate"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.9",
+		"@playwright/test": "1.62.1",
+		"@tailwindcss/cli": "4.3.3",
+		"@tanstack/react-devtools": "^0.10.12",
+		"@tanstack/react-form-devtools": "^0.2.34",
+		"@tanstack/react-query-devtools": "^5.102.7",
+		"@types/bun": "1.4.0",
+		"@types/node": "^26.4.0",
+		"@types/react": "19.2.18",
+		"@types/react-dom": "19.2.4",
+		"bun-plugin-tailwind": "^0.1.2",
+		"daisyui": "5.7.20",
+		"knip": "^6.32.3",
+		"prisma": "7",
+		"tailwindcss": "4.3.3",
+		"typescript": "7.0.2"
+	},
+	"dependencies": {
+		"@lightpanda/browser": "1.3.2",
+		"@prisma/client": "7",
+		"@tanstack/react-form": "^1.33.5",
+		"@tanstack/react-query": "5.101.4",
+		"@tanstack/react-router": "1.170.18",
+		"@trpc/client": "11.18.0",
+		"@trpc/server": "11.18.0",
+		"@trpc/tanstack-react-query": "11.18.0",
+		"better-auth": "1.7.1",
+		"dotenv": "^17.4.2",
+		"isbot": "^5.2.1",
+		"prisma-adapter-bun-sqlite": "^0.8.0",
+		"react": "19.2.8",
+		"react-dom": "19.2.8",
+		"zod": "4.4.3"
+	},
+	"trustedDependencies": [
+		"@lightpanda/browser"
+	]
+}

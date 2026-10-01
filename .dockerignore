@@ -1,0 +1,14 @@
+node_modules
+dist
+.git
+.env
+test-results
+.superpowers
+.pi-subagents
+e2e
+*.md
+Dockerfile
+fly.toml
+prisma/*.db
+prisma/*.db-journal
+prisma/generated

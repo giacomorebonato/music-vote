@@ -1,0 +1,32 @@
+> **Not a Python `requirements.txt`.** This is the project stack spec
+> (the name mirrors the convention used across the mino-* projects).
+> Do **not** run `pip install -r requirements.txt`. See `AGENTS.md` for the
+> authoritative agent context.
+
+## Technical stack
+
+* [Bun](https://bun.com/) used as runtime, package manager, test runner, bundler
+* [daisyUI](https://daisyui.com/) as design system dependant on Tailwind
+* [sqlite](https://sqlite.org) as database
+* [tRPC](https://trpc.io/)
+* [better-auth](https://better-auth.com/)
+* [prisma ORM](https://www.prisma.io/orm)
+* React for frontend SPA only, no SSR
+* [Biome](https://biomejs.dev/) for both linting and  formatting. No semicolon, trailin comma, prefer single quotes
+* [Playwright](https://playwright.dev/) for E2E testing
+* [apm](https://microsoft.github.io/apm/) for setting up MCP and skills
+
+### Not to use
+
+* do not add other http framework like Express, Fastify, Hono, Elysia
+* do not use Vite for bundling frontend code
+* NPM or PNPM... just Bun
+* do not use vendor specific filenames like CLAUDE.md. Read the [skills spec](https://agentskills.io/specification)
+
+## Developer Experience
+
+* AGENTS.md needs to include project key points
+* install best skills for this stack
+* use latest stable version of each package
+* pre-configure Github actions for common checks
+* pre-configure deployment to Fly.io using dockerfile

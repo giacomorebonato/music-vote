@@ -1,0 +1,27 @@
+{
+	"$schema": "https://unpkg.com/knip@6/schema.json",
+	"entry": [
+		"frontend/index.html",
+		"frontend/main.tsx",
+		"frontend/router.tsx",
+		"frontend/routes/*.tsx",
+		"frontend/app.css",
+		"frontend/components/devtools-stub.ts",
+		"backend/auth/auth.ts",
+		"backend/trpc/*.ts",
+		"backend/__tests__/*.test.ts",
+		"frontend/__tests__/*.test.ts",
+		"scripts/prod-css.ts"
+	],
+	"project": [
+		"frontend/**/*",
+		"backend/**/*",
+		"shared/**/*",
+		"e2e/**/*",
+		"scripts/**/*"
+	],
+	"ignoreDependencies": ["bun-plugin-tailwind", "@lightpanda/browser"],
+	"ignoreUnresolved": ["bun-types"],
+	"includeEntryExports": true,
+	"treatConfigHintsAsErrors": true
+}
