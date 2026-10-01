@@ -29,7 +29,7 @@ export function claimSession(): { token: string } {
  * time), and choices outside the poll's option keys, so the scheduler's
  * in-option tally never has to discard a row. Duplicate `(pollId, token)`
  * maps to a friendly ALREADY_VOTED error. After a successful insert the
- * current DB yes/no counts are pushed to the host.
+ * current DB counts per option are pushed to the host.
  */
 export async function castVote(
 	pollId: string,
@@ -66,28 +66,29 @@ export async function castVote(
 		throw error
 	}
 
-	const counts = await countVotes(pollId)
+	const counts = await countVotes(pollId, options)
 	hub.publishHost(poll.roomId, {
 		type: 'vote_count',
 		pollId,
-		yes: counts.yes,
-		no: counts.no,
+		counts,
 	})
 }
 
 async function countVotes(
 	pollId: string,
-): Promise<{ yes: number; no: number }> {
+	options: PollOption[],
+): Promise<Record<string, number>> {
+	const counts: Record<string, number> = {}
+	for (const option of options) {
+		counts[option.key] = 0
+	}
 	const rows = await prisma.vote.groupBy({
 		by: ['choice'],
 		where: { pollId },
 		_count: { choice: true },
 	})
-	let yes = 0
-	let no = 0
 	for (const row of rows) {
-		if (row.choice === 'yes') yes = row._count.choice
-		else if (row.choice === 'no') no = row._count.choice
+		if (row.choice in counts) counts[row.choice] = row._count.choice
 	}
-	return { yes, no }
+	return counts
 }

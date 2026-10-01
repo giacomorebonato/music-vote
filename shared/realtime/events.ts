@@ -41,8 +41,7 @@ export type CodeUpdateEvent = {
 export type VoteCountEvent = {
 	type: 'vote_count'
 	pollId: string
-	yes: number
-	no: number
+	counts: Record<string, number>
 }
 
 /** @public */

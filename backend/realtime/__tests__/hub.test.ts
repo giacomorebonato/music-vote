@@ -131,8 +131,7 @@ test('host and audience sockets receive only their channel events', async () => 
 	hub.publishHost('room-a', {
 		type: 'vote_count',
 		pollId: 'poll-1',
-		yes: 3,
-		no: 1,
+		counts: { yes: 3, no: 1 },
 	})
 	await new Promise((resolve) => setTimeout(resolve, 20))
 	expect(audienceMessages).toHaveLength(1)
@@ -140,8 +139,7 @@ test('host and audience sockets receive only their channel events', async () => 
 	expect(hostMessages[0]).toEqual({
 		type: 'vote_count',
 		pollId: 'poll-1',
-		yes: 3,
-		no: 1,
+		counts: { yes: 3, no: 1 },
 	})
 
 	audienceWs.close()

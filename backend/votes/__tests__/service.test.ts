@@ -216,7 +216,7 @@ test('a second vote from the same session surfaces ALREADY_VOTED and inserts onc
 	expect(await prisma.vote.count({ where: { pollId: poll.id } })).toBe(1)
 })
 
-test('a successful vote pushes vote_count with the DB yes/no counts', async () => {
+test('a successful vote pushes vote_count with the DB per-option counts', async () => {
 	const room = await makeRoom()
 	const poll = await makePoll(room.id, {
 		status: 'open',
@@ -232,9 +232,33 @@ test('a successful vote pushes vote_count with the DB yes/no counts', async () =
 	expect(events.at(-1)?.[1]).toEqual({
 		type: 'vote_count',
 		pollId: poll.id,
-		yes: 2,
-		no: 1,
+		counts: { yes: 2, no: 1 },
 	})
+	expect(hubSpies.publishAudience).not.toHaveBeenCalled()
+})
+
+test('an end-style poll pushes wrap/continue counts, not yes/no zeroes', async () => {
+	const room = await makeRoom()
+	const poll = await makePoll(room.id, {
+		status: 'open',
+		closesAt: new Date(Date.now() + 60_000),
+		options: [
+			{ key: 'wrap', label: 'Wrap it up' },
+			{ key: 'continue', label: 'Keep going' },
+		],
+	})
+
+	await service.castVote(poll.id, 'token-a', 'wrap')
+	await service.castVote(poll.id, 'token-b', 'continue')
+	await service.castVote(poll.id, 'token-c', 'wrap')
+
+	const events = hubSpies.publishHost.mock.calls as [string, WsEvent][]
+	expect(events.at(-1)?.[1]).toEqual({
+		type: 'vote_count',
+		pollId: poll.id,
+		counts: { wrap: 2, continue: 1 },
+	})
+	expect(hubSpies.publishAudience).not.toHaveBeenCalled()
 })
 
 test('currentPoll returns null poll with lobby roomStatus', async () => {
