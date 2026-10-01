@@ -19,6 +19,60 @@ model User {
   updatedAt     DateTime @updatedAt
   sessions      Session[]
   accounts      Account[]
+  rooms         Room[]
+}
+
+model Room {
+  id              String           @id @default(cuid())
+  hostId          String
+  host            User             @relation(fields: [hostId], references: [id], onDelete: Cascade)
+  bpm             Int
+  lengthSec       Int
+  pollIntervalSec Int
+  genre           String
+  status          String
+  currentCode     String?
+  stateDoc        Json
+  createdAt       DateTime         @default(now())
+  polls           Poll[]
+  patternVersions PatternVersion[]
+}
+
+model Poll {
+  id            String    @id @default(cuid())
+  roomId        String
+  room          Room      @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  seq           Int
+  kind          String
+  question      String
+  options       Json
+  openedAt      DateTime?
+  closesAt      DateTime?
+  status        String
+  winningOption String?
+  votes         Vote[]
+
+  @@unique([roomId, seq])
+}
+
+model Vote {
+  id           String @id @default(cuid())
+  pollId       String
+  poll         Poll   @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  sessionToken String
+  choice       String
+
+  @@unique([pollId, sessionToken])
+}
+
+model PatternVersion {
+  id        String    @id @default(cuid())
+  roomId    String
+  room      Room      @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  code      String
+  source    String
+  status    String
+  appliedAt DateTime?
 }
 
 model Session {
