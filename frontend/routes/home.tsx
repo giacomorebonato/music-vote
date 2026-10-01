@@ -10,7 +10,7 @@ export function HomeRoute() {
 			<div className="flex max-w-md flex-col gap-4">
 				<div className="flex flex-col gap-1">
 					<span className="eyebrow">home</span>
-					<h1 className="font-bold text-3xl">{data?.name ?? 'mino-starter'}</h1>
+					<h1 className="font-bold text-3xl">{data?.name ?? 'music-vote'}</h1>
 				</div>
 				<p className="opacity-80">
 					{isPending ? 'Loading…' : (data?.tagline ?? '')}

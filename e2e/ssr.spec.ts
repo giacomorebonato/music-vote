@@ -12,9 +12,7 @@ test('bot gets rendered HTML; browser gets the raw SPA shell', async ({
 	const bot = await request.get('/', { headers: { 'user-agent': BOT_UA } })
 	expect(bot.headers()['content-type'] ?? '').toContain('text/html')
 	const botBody = await bot.text()
-	expect(botBody).toContain(
-		'A Bun + React fullstack starter with bot-friendly SSR.',
-	)
+	expect(botBody).toContain('Crowd-voted AI live music.')
 
 	// Browser → raw SPA shell, #root empty, no rendered content.
 	const browser = await request.get('/', {
@@ -22,5 +20,5 @@ test('bot gets rendered HTML; browser gets the raw SPA shell', async ({
 	})
 	const browserBody = await browser.text()
 	expect(browserBody).toContain('<div id="root"></div>')
-	expect(browserBody).not.toContain('bot-friendly SSR')
+	expect(browserBody).not.toContain('Crowd-voted AI live music.')
 })

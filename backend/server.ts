@@ -136,4 +136,4 @@ const httpServer = Bun.serve<SocketData>({
 	},
 })
 
-console.log(`mino-starter on http://localhost:${httpServer.port}`)
+console.log(`music-vote on http://localhost:${httpServer.port}`)

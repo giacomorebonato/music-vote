@@ -10,7 +10,7 @@
 
 - TypeScript/TSX/config filenames: kebab-case (`note-list.tsx`, not `NoteList.tsx`). React component identifiers stay PascalCase; only file names are kebab-case.
 - No vendor-specific instruction filenames (e.g. `CLAUDE.md`) — use `AGENTS.md`.
-- Biome `noChildrenProp` is disabled for `frontend/components/note-form.tsx` and `frontend/components/auth-form.tsx` (TanStack Form's `form.Field`/`form.Subscribe` use a children render-prop).
+- Biome `noChildrenProp` is disabled for `frontend/components/auth-form.tsx` (TanStack Form's `form.Field`/`form.Subscribe` use a children render-prop).
 - Placement rules + move verification gate live in `.agents/skills/project-structure/SKILL.md` — see [vertical-slices.md](vertical-slices.md).
 
 ## Client state
@@ -25,7 +25,7 @@ TanStack Form (`useForm`) with Zod schemas passed directly to `validators` (Stan
 
 ## Shared schemas
 
-Shared validation schemas live in `shared/schemas/` — single source of truth, reused by both frontend form `validators` and backend tRPC `input(...)`. Example: `noteSchema` in `shared/schemas/note.ts`, consumed by `backend/trpc/notes.ts`.
+Shared validation schemas live in `shared/schemas/` — single source of truth, reused by both frontend form `validators` and backend tRPC `input(...)`. Example: `createRoomSchema` in `shared/schemas/room.ts`, consumed by `backend/trpc/rooms.ts`.
 
 ## Devtools
 
@@ -42,5 +42,5 @@ Unified TanStack devtools shell at `frontend/components/devtools.tsx`, mounted o
 
 - Auth base path: `/api/auth` (configured in `backend/auth/auth.ts`)
 - tRPC endpoint: `/api/trpc` (configured in `backend/server.ts`)
-- SPA client routes: `/`, `/login`, `/notes`
+- SPA client routes: `/`, `/login`, `/create`, `/r/$id` (vote), `/r/$id/host`
 - `Context` type flows from `backend/trpc/context.ts` → `backend/trpc/root.ts` → `shared/trpc.ts` → `frontend/lib/trpc.ts`

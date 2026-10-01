@@ -12,4 +12,4 @@ Bun fullstack starter: React 19 SPA (TanStack Router/Query/Form, tRPC, daisyUI v
 
 Aliases `@backend/* @frontend/* @shared/*`; unit tests co-located in `__tests__/`; placement rules in `.agents/skills/project-structure/SKILL.md`.
 
-Deep docs: [vertical-slice workflow](docs/agents/vertical-slices.md) · [scripts/env/hooks](docs/agents/commands.md) · [conventions](docs/agents/conventions.md) · [Prisma v7](docs/agents/prisma.md) · [bot SSR](docs/agents/bot-ssr.md) · [React Compiler](docs/agents/react-compiler.md) · [deployment](docs/agents/deployment.md)
+Deep docs: [vertical-slice workflow](docs/agents/vertical-slices.md) · [scripts/env/hooks](docs/agents/commands.md) · [conventions](docs/agents/conventions.md) · [Prisma v7](docs/agents/prisma.md) · [bot SSR](docs/agents/bot-ssr.md) · [React Compiler](docs/agents/react-compiler.md) · [deployment](docs/agents/deployment.md) · [env/deploy/ops](docs/agents/music-vote.md)

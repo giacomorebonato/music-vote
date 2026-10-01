@@ -1,46 +1,59 @@
-# mino-starter
+# music-vote
 
-Reusable full-stack starter built **AI-first**: Bun + React + tRPC + better-auth + Prisma + daisyUI. The repo is wired so a coding agent can take a spec and ship a feature with minimal hand-holding — prescriptive `AGENTS.md`, committed placement skill, APM-managed skills + MCP, strict lint, and a one-command bootstrap.
+Crowd-voted AI live music. A host opens a room at a venue, picks a vibe, and
+the music starts playing from the host's browser into the PA. Phones join by
+scanning a QR code — no login, no app — and vote yes/no on musical directions
+("should this sound more 80s?"). Each winning answer is turned into new
+live-coded Strudel by an LLM, validated server-side, applied at the next cycle
+boundary, and the set keeps evolving until an AI outro closes it with a
+timeline of every vote that shaped the performance. The server conducts and
+owns the room state; the host browser is the audio engine; phones only vote.
 
-## Quick start (fresh clone)
+## Quick start
 
 ```sh
-bun run bootstrap   # deps + APM skills/MCP + prisma generate + migrate + git hooks
-cp .env.example .env # then fill BETTER_AUTH_SECRET etc.
+bun run bootstrap    # deps + skills/MCP + prisma generate + migrate + git hooks
+cp .env.example .env # set BETTER_AUTH_SECRET (openssl rand -base64 32)
 bun run dev          # http://localhost:3000
 ```
 
 Requires Bun 1.4.2+ (see `.bun-version`).
 
-## Working with an agent
+## Run locally with the mock LLM
 
-- **Read first:** `AGENTS.md` — stack, conventions, scripts, deploy. It opens with a TL;DR for the first commands and the "add a feature" vertical-slice recipe.
-- **Placement rules:** `.agents/skills/project-structure/SKILL.md` — where every file goes and the move verification gate.
-- **Prior decisions:** `docs/superpowers/README.md` — index of specs + plans (brainstorm → spec → plan → implement). New work should follow the same flow.
-- **Stack constraints:** `requirements.txt` — what to use and what **not** to use (no Vite, no Express/Hono, no npm/pnpm, no `CLAUDE.md`).
+Real generation needs an Ollama endpoint, but the whole loop is runnable
+offline with scripted responses:
+
+```sh
+# in .env
+LLM_PROVIDER=mock
+LLM_MOCK_SCRIPT=e2e/fixtures/llm-script.json
+```
+
+Then sign up, create a room, and start it. Every LLM call pops the next canned
+response from that file, so the flow is deterministic and safe for demos and
+tests. For real musicality, set `LLM_PROVIDER=ollama` and point
+`OLLAMA_BASE_URL` at a local Ollama or at `https://ollama.com` with
+`OLLAMA_API_KEY`.
+
+## Docs
+
+- **Spec:** [`docs/superpowers/specs/2026-10-01-music-vote-design.md`](docs/superpowers/specs/2026-10-01-music-vote-design.md) — product design, room lifecycle, failure table.
+- **Plan:** [`docs/superpowers/plans/2026-10-01-music-vote.md`](docs/superpowers/plans/2026-10-01-music-vote.md) — the task-by-task build.
+- **Env, deploy, ops:** [`docs/agents/music-vote.md`](docs/agents/music-vote.md) — env vars, `fly deploy`, single-machine/SQLite constraints, known limitations.
+- **Agent context:** [`AGENTS.md`](AGENTS.md) — stack, scripts, conventions; [`docs/agents/`](docs/agents/) covers commands, deployment, Prisma, bot SSR, and React Compiler in depth.
+- **Placement rules:** [`.agents/skills/project-structure/SKILL.md`](.agents/skills/project-structure/SKILL.md).
 
 ## Verification
 
 - `bun run check` — biome + typecheck + knip + unit tests. Run before claiming work done.
-- `bun run check:full` — adds Playwright E2E. Run for UI/auth/route changes.
-- `bun run premerge` — `check` then fast-forward merge → main → push.
+- `bun run check:full` — adds Playwright E2E (the full democratic-music cycle). Run for UI/auth/route changes.
+- `bun run premerge` — `check` then fast-forward merge → main and push.
 
-Git hooks (`.githooks/`, wired by `bootstrap`) run biome+typecheck at commit and the full gate at push.
+Git hooks (`.githooks/`, wired by `bootstrap`) run biome + typecheck at commit
+and the full gate at push.
 
-## Scripts
+## License
 
-- `bun run dev` — dev server with HMR
-- `bun run build` — production bundle
-- `bun run start` — production server
-- `bun test` — unit tests (backend + shared + frontend)
-- `bun run test:e2e` — Playwright E2E
-- `bun run check:full` — `check` + `test:e2e`
-- `bun run format` — Biome check + format (writes fixes)
-- `bun run check` — pre-merge gate (biome + typecheck + knip + test), shared by `premerge` and CI
-- `bun run premerge` — run `check`, then fast-forward merge current branch → main and push
-- `bun run bootstrap` — one-command fresh-clone setup (idempotent)
-- `bun run typecheck` — tsc --noEmit
-- `bun run db:migrate` — prisma migrate dev
-- `bun run db:reset` — prisma migrate reset
-
-See `AGENTS.md` for agent context and `apm.yml` for the skills/MCP manifest.
+AGPL-3.0 — see [`LICENSE`](LICENSE). The repo is public because it embeds
+Strudel (`@strudel/web`, `@strudel/transpiler`), which is AGPL-3.0.

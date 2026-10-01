@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-command setup for a fresh clone of mino-starter.
+# One-command setup for a fresh clone of music-vote.
 # Idempotent — safe to re-run.
 #
 # Installs Bun deps, APM skills + MCP, generates the Prisma client,

@@ -1,10 +1,10 @@
-app = "mino-starter"
+app = "music-vote"
 primary_region = "ams"
 
 [build]
 
 [mount]
-source = "mino_starter_data"
+source = "music_vote_data"
 destination = "/data"
 
 [http_service]

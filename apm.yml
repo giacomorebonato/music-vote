@@ -1,4 +1,4 @@
-name: mino-starter
+name: music-vote
 version: 0.1.0
 targets:
   - agent-skills

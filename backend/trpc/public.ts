@@ -5,7 +5,7 @@ const t = initTRPC.context<Context>().create()
 
 export const publicRouter = t.router({
 	siteInfo: t.procedure.query(() => ({
-		name: 'mino-starter',
-		tagline: 'A Bun + React fullstack starter with bot-friendly SSR.',
+		name: 'music-vote',
+		tagline: 'Crowd-voted AI live music.',
 	})),
 })
