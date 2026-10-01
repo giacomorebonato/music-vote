@@ -11,6 +11,7 @@ import { execSync } from 'node:child_process'
 import { resolve } from 'node:path'
 import { MockLlmProvider } from '@backend/llm/provider'
 import type { Context } from '@backend/trpc/context'
+import type { WsEvent } from '@shared/realtime/events'
 import { PrismaBunSqlite } from 'prisma-adapter-bun-sqlite'
 import { PrismaClient } from '../../../prisma/generated/client'
 
@@ -36,6 +37,10 @@ let service: typeof import('@backend/rooms/service')
 let roomsRouter: typeof import('@backend/trpc/rooms').roomsRouter
 let mockProvider: MockLlmProvider
 let mockScheduler: ReturnType<typeof jest.fn>
+let hubSpies: {
+	publishHost: ReturnType<typeof jest.fn>
+	publishAudience: ReturnType<typeof jest.fn>
+}
 
 async function makeHost(): Promise<{ id: string; email: string }> {
 	const email = `room-svc-host-${crypto.randomUUID()}@example.com`
@@ -47,11 +52,18 @@ async function makeHost(): Promise<{ id: string; email: string }> {
 beforeAll(async () => {
 	process.env.DATABASE_URL = 'file:./test.db'
 	mockScheduler = jest.fn()
+	hubSpies = {
+		publishHost: jest.fn(),
+		publishAudience: jest.fn(),
+	}
 	mock.module('@backend/polls/scheduler', () => ({
 		armScheduler: mockScheduler,
 	}))
 	mock.module('@backend/llm/provider', () => ({
 		getLlmProvider: () => mockProvider,
+	}))
+	mock.module('@backend/realtime/hub', () => ({
+		hub: hubSpies,
 	}))
 	service = await import('@backend/rooms/service')
 	const roomsMod = await import('@backend/trpc/rooms')
@@ -65,6 +77,8 @@ beforeEach(() => {
 		's("bd sd cp hh")',
 	])
 	mockScheduler.mockClear()
+	hubSpies.publishHost.mockClear()
+	hubSpies.publishAudience.mockClear()
 })
 
 afterAll(async () => {
@@ -85,6 +99,30 @@ test('createRoom creates lobby with lengthSec = lengthMin * 60', async () => {
 
 	expect(room.status).toBe('lobby')
 	expect(room.lengthSec).toBe(600)
+})
+
+test('startRoom is atomic: question-gen throw leaves room lobby with zero versions', async () => {
+	const host = await makeHost()
+	const room = await service.createRoom(host.id, baseInput())
+
+	mockProvider = new MockLlmProvider(['s("bd sd cp hh")'])
+	mockProvider.chat = async () => {
+		throw new Error('question generation failed')
+	}
+
+	await expect(service.startRoom(room.id, host.id)).rejects.toThrow()
+
+	const updated = await prisma.room.findUnique({ where: { id: room.id } })
+	expect(updated?.status).toBe('lobby')
+	expect(updated?.currentCode).toBeNull()
+
+	const versions = await prisma.patternVersion.findMany({
+		where: { roomId: room.id },
+	})
+	expect(versions).toHaveLength(0)
+
+	const polls = await prisma.poll.findMany({ where: { roomId: room.id } })
+	expect(polls).toHaveLength(0)
 })
 
 test('startRoom makes room live, applies initial version, sets currentCode, arms scheduler', async () => {
@@ -112,6 +150,18 @@ test('startRoom makes room live, applies initial version, sets currentCode, arms
 
 	expect(mockScheduler.mock.calls.length).toBe(1)
 	expect(mockScheduler.mock.calls[0][0]).toBe(room.id)
+
+	const hostEvents = hubSpies.publishHost.mock.calls as [string, WsEvent][]
+	expect(hostEvents).toHaveLength(1)
+	expect(hostEvents[0][0]).toBe(room.id)
+	expect(hostEvents[0][1]).toMatchObject({
+		type: 'code_update',
+		code: 's("bd sd cp hh")',
+		kind: 'initial',
+	})
+	expect((hostEvents[0][1] as { versionId: string }).versionId).toBe(
+		versions[0].id,
+	)
 })
 
 test('undoLastChange reverts current code and marks version reverted', async () => {
@@ -141,6 +191,19 @@ test('undoLastChange reverts current code and marks version reverted', async () 
 	expect(versions).toHaveLength(2)
 	expect(versions[0].status).toBe('applied')
 	expect(versions[1].status).toBe('reverted')
+
+	const hostEvents = hubSpies.publishHost.mock.calls as [string, WsEvent][]
+	const undoEvent = hostEvents.find(
+		([, event]) => event.type === 'code_update' && event.kind === 'undo',
+	)
+	expect(undoEvent).toBeDefined()
+	if (!undoEvent) throw new Error('undo event missing')
+	expect(undoEvent[1]).toMatchObject({
+		type: 'code_update',
+		code: 's("bd sd cp hh")',
+		kind: 'undo',
+	})
+	expect((undoEvent[1] as { versionId: string }).versionId).toBe(versions[0].id)
 })
 
 test('undoLastChange is a no-op when there is no applied version', async () => {
@@ -190,6 +253,21 @@ test('endRoom while poll open closes poll with null winner and no evolution vers
 	})
 	expect(afterVersions.length).toBe(beforeVersions.length + 1)
 	expect(afterVersions.at(-1)?.source).toBe('outro')
+
+	const hostEvents = hubSpies.publishHost.mock.calls as [string, WsEvent][]
+	const outroEvent = hostEvents.find(
+		([, event]) => event.type === 'code_update' && event.kind === 'outro',
+	)
+	expect(outroEvent).toBeDefined()
+	if (!outroEvent) throw new Error('outro event missing')
+	expect(outroEvent[1]).toMatchObject({
+		type: 'code_update',
+		code: 's("bd sd cp hh")',
+		kind: 'outro',
+	})
+	expect((outroEvent[1] as { versionId: string }).versionId).toBe(
+		afterVersions.at(-1)?.id ?? '',
+	)
 })
 
 test('endRoom from lobby skips outro and ends immediately', async () => {
@@ -201,10 +279,15 @@ test('endRoom from lobby skips outro and ends immediately', async () => {
 	const updated = await prisma.room.findUnique({ where: { id: room.id } })
 	expect(updated?.status).toBe('ended')
 
-	const versions = await prisma.patternVersion.findMany({
-		where: { roomId: room.id },
-	})
-	expect(versions).toHaveLength(0)
+	const audienceEvents = hubSpies.publishAudience.mock.calls as [
+		string,
+		WsEvent,
+	][]
+	const hostEvents = hubSpies.publishHost.mock.calls as [string, WsEvent][]
+	expect(audienceEvents).toHaveLength(1)
+	expect(audienceEvents[0][1]).toEqual({ type: 'room_ended' })
+	expect(hostEvents).toHaveLength(1)
+	expect(hostEvents[0][1]).toEqual({ type: 'room_status', status: 'ended' })
 })
 
 test('endRoom on live room goes outro then ended after pollIntervalSec', async () => {
@@ -250,6 +333,14 @@ test('reportApplyResult(false) rejects version', async () => {
 		where: { id: candidate.id },
 	})
 	expect(version?.status).toBe('rejected')
+
+	const hostEvents = hubSpies.publishHost.mock.calls as [string, WsEvent][]
+	expect(hostEvents).toHaveLength(1)
+	expect(hostEvents[0][1]).toEqual({
+		type: 'pattern_rejected',
+		versionId: candidate.id,
+		error: 'too harsh',
+	})
 })
 
 test('router get returns FORBIDDEN for non-owner', async () => {

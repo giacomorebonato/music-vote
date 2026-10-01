@@ -45,6 +45,7 @@ export async function startRoom(roomId: string, hostId: string): Promise<void> {
 		genre: room.genre,
 		bpm: room.bpm,
 	})
+	const question = await generateNextQuestion(provider, doc)
 	const now = new Date()
 	const version = await prisma.patternVersion.create({
 		data: {
@@ -55,7 +56,6 @@ export async function startRoom(roomId: string, hostId: string): Promise<void> {
 			appliedAt: now,
 		},
 	})
-	const question = await generateNextQuestion(provider, doc)
 	await prisma.room.update({
 		where: { id: roomId },
 		data: {
