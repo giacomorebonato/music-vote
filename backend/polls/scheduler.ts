@@ -4,6 +4,7 @@ import { generateEvolution, generateNextQuestion } from '@backend/music/engine'
 import { applyChange, type StateDoc } from '@backend/music/state-doc'
 import { compileCheck } from '@backend/music/validate'
 import { hub } from '@backend/realtime/hub'
+import type { WsEvent } from '@shared/realtime/events'
 import type { Prisma, Room } from '../../prisma/generated/client'
 
 /**
@@ -283,7 +284,7 @@ async function openNextQueuedPoll(roomId: string): Promise<void> {
 	})
 
 	const options = parseOptions(queued.options)
-	hub.publishAudience(roomId, {
+	const opened: WsEvent = {
 		type: 'poll_opened',
 		poll: {
 			id: queued.id,
@@ -291,7 +292,11 @@ async function openNextQueuedPoll(roomId: string): Promise<void> {
 			options: options.map((option) => option.label),
 			closesAt: closesAt.toISOString(),
 		},
-	})
+	}
+	hub.publishAudience(roomId, opened)
+	// Host console follows the live poll (question + bars), including a poll
+	// that opens with zero votes; audience publication is unchanged.
+	hub.publishHost(roomId, opened)
 
 	const scheduler = active.get(roomId)
 	if (scheduler) {
@@ -324,11 +329,13 @@ async function closePoll(pollId: string, roomId: string): Promise<void> {
 		data: { status: 'closed', winningOption: winner },
 	})
 
-	hub.publishAudience(roomId, {
+	const closed: WsEvent = {
 		type: 'poll_closed',
 		pollId: poll.id,
 		winningOption: winner,
-	})
+	}
+	hub.publishAudience(roomId, closed)
+	hub.publishHost(roomId, closed)
 
 	if (winner) {
 		if (poll.kind === 'end') {

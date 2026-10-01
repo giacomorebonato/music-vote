@@ -365,6 +365,44 @@ test('zero votes: null winner, no version, next poll armed', async () => {
 	scheduler.disarmScheduler(room.id)
 })
 
+test('host channel receives poll_opened and poll_closed alongside the audience', async () => {
+	const host = await makeHost()
+	const room = await makeRoom(host.id)
+	const poll = await makePoll(room.id, 1)
+
+	scheduler.armScheduler(room.id)
+	await fakeClock.tick(0)
+
+	// The host console must follow the current poll without any vote landing:
+	// a projector has to show a freshly opened poll even at zero votes.
+	const hostOpened = hostEvents().find((e) => e[1].type === 'poll_opened')
+	expect(hostOpened?.[0]).toBe(room.id)
+	expect(hostOpened?.[1]).toMatchObject({
+		type: 'poll_opened',
+		poll: { id: poll.id, question: 'More drums?' },
+	})
+	const audienceOpened = audienceEvents().find(
+		(e) => e[1].type === 'poll_opened',
+	)
+	expect(audienceOpened?.[1]).toEqual(hostOpened?.[1])
+
+	await fakeClock.tick(5000)
+
+	const hostClosed = hostEvents().find((e) => e[1].type === 'poll_closed')
+	expect(hostClosed?.[0]).toBe(room.id)
+	expect(hostClosed?.[1]).toMatchObject({
+		type: 'poll_closed',
+		pollId: poll.id,
+		winningOption: null,
+	})
+	const audienceClosed = audienceEvents().find(
+		(e) => e[1].type === 'poll_closed',
+	)
+	expect(audienceClosed?.[1]).toEqual(hostClosed?.[1])
+
+	scheduler.disarmScheduler(room.id)
+})
+
 test('end poll appears at 75% length and wrap wins triggers endRoom', async () => {
 	const host = await makeHost()
 	const room = await makeRoom(host.id, {

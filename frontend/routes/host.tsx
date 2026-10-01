@@ -115,6 +115,15 @@ function HostConsole({ roomId }: { roomId: string }) {
 		setPlayerCode(currentCode)
 	}, [currentCode])
 
+	// The server stops publishing code once the outro finishes, so the host
+	// browser has to hush the engine itself. Keyed on the status string so it
+	// runs exactly once per transition into `ended` (idempotent across refetches).
+	const roomStatus = room?.status
+	useEffect(() => {
+		if (roomStatus !== 'ended') return
+		playerRef.current?.stop()
+	}, [roomStatus])
+
 	// Seed and reconnect applies are already-applied server versions; there is
 	// no candidate to report. Only surface audible failures.
 	const handlePlayerResult = useCallback(
@@ -128,6 +137,11 @@ function HostConsole({ roomId }: { roomId: string }) {
 		(event: CodeUpdateEvent) => {
 			const player = playerRef.current
 			if (!player) return
+			// Start publishes `initial` while the seed effect may already be
+			// applying the same code from the refetched room; skip the duplicate.
+			if (event.kind === 'initial' && appliedCodeRef.current === event.code) {
+				return
+			}
 			appliedCodeRef.current = event.code
 			void player.applyPattern(event.code).then((result) => {
 				if (result.ok) {
@@ -168,6 +182,13 @@ function HostConsole({ roomId }: { roomId: string }) {
 					break
 				case 'vote_count':
 					setVoteTally({ pollId: event.pollId, counts: event.counts })
+					break
+				case 'poll_opened':
+				case 'poll_closed':
+					// Refetch rather than using the payload: the event carries option
+					// labels (no keys) and no zero-filled counts, and a poll that opens
+					// with zero votes must still show up on the console.
+					void refetchRoom()
 					break
 				case 'warning':
 					showToast(event.message)
