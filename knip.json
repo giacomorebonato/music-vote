@@ -22,7 +22,6 @@
 	],
 	"ignoreDependencies": ["bun-plugin-tailwind", "@lightpanda/browser"],
 	"ignoreUnresolved": ["bun-types"],
-	"ignore": ["frontend/audio/strudel-player.tsx"],
 	"includeEntryExports": true,
 	"treatConfigHintsAsErrors": true
 }

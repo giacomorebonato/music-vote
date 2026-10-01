@@ -7,6 +7,7 @@ import {
 	undoLastChange,
 } from '@backend/rooms/service'
 import type { Context } from '@backend/trpc/context'
+import { parseOptions } from '@backend/votes/service'
 import { createRoomSchema } from '@shared/schemas/room'
 import { initTRPC, TRPCError } from '@trpc/server'
 import { z } from 'zod'
@@ -62,15 +63,32 @@ export const roomsRouter = t.router({
 			if (!room) {
 				throw new TRPCError({ code: 'NOT_FOUND' })
 			}
-			const counts: Record<string, number> = {}
+			// Zero-fill from the open poll's option keys so the shape matches the
+			// `vote_count` WS event and the client can render any poll (evolution
+			// polls are yes/no, the end poll is wrap/continue).
+			const voteCounts: Record<string, number> = {}
+			for (const option of parseOptions(openPoll?.options)) {
+				voteCounts[option.key] = 0
+			}
 			for (const row of voteAgg) {
-				counts[row.choice] = row._count.choice
+				if (row.choice in voteCounts) {
+					voteCounts[row.choice] = row._count.choice
+				}
 			}
 			return {
 				room,
 				versions,
-				openPoll,
-				voteCounts: { yes: counts.yes ?? 0, no: counts.no ?? 0 },
+				// Shape the wire response so the client never has to narrow Prisma's
+				// recursive Json column (the host console renders options generically).
+				openPoll: openPoll
+					? {
+							id: openPoll.id,
+							question: openPoll.question,
+							closesAt: openPoll.closesAt,
+							options: parseOptions(openPoll.options),
+						}
+					: null,
+				voteCounts,
 			}
 		}),
 
