@@ -141,6 +141,27 @@ async function armLive(room: Room): Promise<void> {
 	}, intervalMs)
 
 	await openNextQueuedPoll(room.id)
+	await armExistingPollClose(room.id)
+}
+
+async function armExistingPollClose(roomId: string): Promise<void> {
+	const scheduler = active.get(roomId)
+	if (!scheduler || scheduler.pollCloseHandle !== undefined) return
+
+	const openPoll = await prisma.poll.findFirst({
+		where: { roomId, status: 'open' },
+	})
+	if (!openPoll?.closesAt) return
+
+	const remaining = openPoll.closesAt.getTime() - clock.now()
+	if (remaining <= 0) {
+		await closePoll(openPoll.id, roomId)
+		return
+	}
+
+	scheduler.pollCloseHandle = clock.setTimeout(async () => {
+		await closePoll(openPoll.id, roomId)
+	}, remaining)
 }
 
 async function liveTick(roomId: string, intervalMs: number): Promise<void> {
@@ -312,6 +333,9 @@ async function closePoll(pollId: string, roomId: string): Promise<void> {
 		if (poll.kind === 'end') {
 			if (winner === 'wrap') {
 				await triggerEndRoom(roomId, room.hostId)
+			} else if (winner === 'continue') {
+				await queueNextEvolution(roomId, room, { afterContinue: true })
+				await openNextQueuedPoll(roomId)
 			}
 		} else if (poll.kind === 'evolution') {
 			await runEvolution(room, poll, winner)
@@ -383,18 +407,27 @@ async function updateRoomDoc(
 	})
 }
 
-async function queueNextEvolution(roomId: string, room: Room): Promise<void> {
+async function queueNextEvolution(
+	roomId: string,
+	room: Room,
+	opts?: { afterContinue?: boolean },
+): Promise<void> {
 	const existingEnd = await prisma.poll.findFirst({
-		where: { roomId, kind: 'end' },
+		where: {
+			roomId,
+			kind: 'end',
+			status: { in: ['queued', 'open'] },
+		},
 	})
 	if (existingEnd) return
 
 	const now = clock.now()
 	const insertAt = room.createdAt.getTime() + room.lengthSec * 750
-	if (now >= insertAt) return
-
 	const intervalMs = Math.max(room.pollIntervalSec, MIN_INTERVAL_SECS) * 1000
-	if (now + intervalMs >= insertAt) return
+	if (!opts?.afterContinue) {
+		if (now >= insertAt) return
+		if (now + intervalMs >= insertAt) return
+	}
 
 	const last = await prisma.poll.findFirst({
 		where: { roomId },
@@ -482,11 +515,14 @@ function tallyVotes(
 	options: PollOption[],
 ): Map<string, number> {
 	const counts = new Map<string, number>()
+	const validKeys = new Set(options.map((option) => option.key))
 	for (const option of options) {
 		counts.set(option.key, 0)
 	}
 	for (const vote of votes) {
-		counts.set(vote.choice, (counts.get(vote.choice) ?? 0) + 1)
+		if (validKeys.has(vote.choice)) {
+			counts.set(vote.choice, (counts.get(vote.choice) ?? 0) + 1)
+		}
 	}
 	return counts
 }

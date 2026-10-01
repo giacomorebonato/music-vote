@@ -566,3 +566,128 @@ test('tie-break uses same seed deterministically and logs seed', async () => {
 	console.info = realInfo
 	scheduler.disarmScheduler(room.id)
 })
+
+test('restoreSchedulers arms close timer for non-overdue open poll', async () => {
+	const host = await makeHost()
+	const room = await makeRoom(host.id)
+	const now = new Date(fakeClock.now())
+	const poll = await prisma.poll.create({
+		data: {
+			roomId: room.id,
+			seq: 1,
+			kind: 'evolution',
+			question: 'Mid-window?',
+			options: [
+				{ key: 'yes', label: 'Yes' },
+				{ key: 'no', label: 'No' },
+			],
+			status: 'open',
+			openedAt: now,
+			closesAt: new Date(now.getTime() + 3000),
+		},
+	})
+	await vote(poll.id, 'yes', 'v1')
+
+	await scheduler.restoreSchedulers()
+
+	expect(scheduler.isSchedulerArmed(room.id)).toBe(true)
+
+	await fakeClock.tick(3000)
+
+	const closed = await prisma.poll.findUnique({ where: { id: poll.id } })
+	expect(closed?.status).toBe('closed')
+	expect(closed?.winningOption).toBe('yes')
+
+	const versions = await prisma.patternVersion.findMany({
+		where: { roomId: room.id },
+	})
+	expect(versions).toHaveLength(1)
+
+	const codeUpdate = hostEvents().find(
+		(e) => e[1].type === 'code_update' && e[1].kind === 'evolution',
+	)
+	expect(codeUpdate).toBeDefined()
+
+	scheduler.disarmScheduler(room.id)
+})
+
+test('off-option votes are ignored and do not crash', async () => {
+	const host = await makeHost()
+	const room = await makeRoom(host.id, { pollIntervalSec: 10 })
+	const poll = await makePoll(room.id, 1)
+
+	scheduler.armScheduler(room.id)
+	await fakeClock.tick(0)
+
+	await vote(poll.id, 'yes', 'v1')
+	await vote(poll.id, 'invalid-choice', 'v2')
+	await vote(poll.id, 'no', 'v3')
+	await vote(poll.id, 'yes', 'v4')
+
+	await fakeClock.tick(5000)
+
+	const closed = await prisma.poll.findUnique({ where: { id: poll.id } })
+	expect(closed?.status).toBe('closed')
+	expect(closed?.winningOption).toBe('yes')
+
+	const versions = await prisma.patternVersion.findMany({
+		where: { roomId: room.id },
+	})
+	expect(versions).toHaveLength(1)
+
+	scheduler.disarmScheduler(room.id)
+})
+
+test('end poll continue queues next evolution and keeps room live', async () => {
+	const host = await makeHost()
+	const room = await makeRoom(host.id, {
+		lengthSec: 120,
+		pollIntervalSec: 20,
+	})
+	const poll = await prisma.poll.create({
+		data: {
+			roomId: room.id,
+			seq: 1,
+			kind: 'end',
+			question: 'End the set?',
+			options: [
+				{ key: 'wrap', label: 'Wrap it up' },
+				{ key: 'continue', label: 'Keep going' },
+			],
+			status: 'queued',
+		},
+	})
+
+	scheduler.armScheduler(room.id)
+	await fakeClock.tick(0)
+
+	const open = await prisma.poll.findUnique({ where: { id: poll.id } })
+	expect(open?.status).toBe('open')
+
+	await vote(poll.id, 'continue', 'v1')
+	await fakeClock.tick(5000)
+
+	const closed = await prisma.poll.findUnique({ where: { id: poll.id } })
+	expect(closed?.status).toBe('closed')
+	expect(closed?.winningOption).toBe('continue')
+
+	const updatedRoom = await prisma.room.findUnique({ where: { id: room.id } })
+	expect(updatedRoom?.status).toBe('live')
+
+	const nextEvolution = await prisma.poll.findFirst({
+		where: {
+			roomId: room.id,
+			kind: 'evolution',
+			status: { in: ['queued', 'open'] },
+		},
+		orderBy: { seq: 'desc' },
+	})
+	expect(nextEvolution).toBeDefined()
+
+	const outroStarted = hostEvents().some(
+		(e) => e[1].type === 'code_update' && e[1].kind === 'outro',
+	)
+	expect(outroStarted).toBe(false)
+
+	scheduler.disarmScheduler(room.id)
+})
