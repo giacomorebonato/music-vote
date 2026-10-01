@@ -721,11 +721,11 @@ test('end poll continue queues next evolution and keeps room live', async () => 
 	scheduler.disarmScheduler(room.id)
 })
 
-test('end poll continue sustains polling for remaining time', async () => {
+test('end poll continue sustains polling past insertAt', async () => {
 	const host = await makeHost()
 	const room = await makeRoom(host.id, {
 		lengthSec: 120,
-		pollIntervalSec: 20,
+		pollIntervalSec: 5,
 	})
 	const endPoll = await prisma.poll.create({
 		data: {
@@ -745,9 +745,9 @@ test('end poll continue sustains polling for remaining time', async () => {
 	await fakeClock.tick(0)
 
 	await vote(endPoll.id, 'continue', 'v1')
+	// close end poll at t=5s, queue evo2, open it immediately
 	await fakeClock.tick(5000)
 
-	// After continue, an evolution poll should be queued and opened immediately
 	let queued = await prisma.poll.findMany({
 		where: {
 			roomId: room.id,
@@ -757,12 +757,13 @@ test('end poll continue sustains polling for remaining time', async () => {
 	})
 	expect(queued).toHaveLength(1)
 
-	// First post-continue evolution poll lifecycle
+	// Advance to t=95s (past insertAt=90s). Close first post-continue evolution,
+	// then let interval tick queue and open the next one.
 	const evo1 = queued[0]
 	await vote(evo1.id, 'yes', 'v2')
-	await fakeClock.tick(20000) // open evo1 then close it at +5s; queues evo2 around +20s
+	await fakeClock.tick(90000)
 
-	const stillLive = await prisma.room.findUnique({ where: { id: room.id } })
+	let stillLive = await prisma.room.findUnique({ where: { id: room.id } })
 	expect(stillLive?.status).toBe('live')
 
 	queued = await prisma.poll.findMany({
@@ -776,8 +777,12 @@ test('end poll continue sustains polling for remaining time', async () => {
 	const evo2 = queued[0]
 	expect(evo2.seq).toBeGreaterThan(evo1.seq)
 
+	// Advance to t=100s, drive one more complete post-insertAt cycle.
 	await vote(evo2.id, 'yes', 'v3')
-	await fakeClock.tick(20000)
+	await fakeClock.tick(5000)
+
+	stillLive = await prisma.room.findUnique({ where: { id: room.id } })
+	expect(stillLive?.status).toBe('live')
 
 	queued = await prisma.poll.findMany({
 		where: {
@@ -787,6 +792,8 @@ test('end poll continue sustains polling for remaining time', async () => {
 		},
 	})
 	expect(queued).toHaveLength(1)
+	const evo3 = queued[0]
+	expect(evo3.seq).toBeGreaterThan(evo2.seq)
 
 	const outroStarted = hostEvents().some(
 		(e) => e[1].type === 'code_update' && e[1].kind === 'outro',

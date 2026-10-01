@@ -427,15 +427,14 @@ async function queueNextEvolution(
 	const now = clock.now()
 	const insertAt = room.createdAt.getTime() + room.lengthSec * 750
 	const intervalMs = Math.max(room.pollIntervalSec, MIN_INTERVAL_SECS) * 1000
-	if (!opts?.afterContinue) {
-		if (now >= insertAt) return
-		if (now + intervalMs >= insertAt) return
-	}
 
 	const scheduler = active.get(roomId)
-	if (scheduler?.continuing && now >= insertAt) {
+	if (scheduler?.continuing) {
 		const endAt = room.createdAt.getTime() + room.lengthSec * 1000
 		if (now + intervalMs >= endAt) return
+	} else if (!opts?.afterContinue) {
+		if (now >= insertAt) return
+		if (now + intervalMs >= insertAt) return
 	}
 
 	const last = await prisma.poll.findFirst({
@@ -546,7 +545,7 @@ function pickWinner(
 	for (const count of counts.values()) {
 		if (count > max) max = count
 	}
-	if (max === 0) return null
+	if (max <= 0) return null
 	const tied = options.filter((option) => counts.get(option.key) === max)
 	if (tied.length === 1) return tied[0].key
 	const seed = hashStringToSeed(pollId)
