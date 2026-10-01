@@ -59,6 +59,7 @@
 		"zod": "4.4.3"
 	},
 	"trustedDependencies": [
-		"@lightpanda/browser"
+		"@lightpanda/browser",
+		"bun"
 	]
 }
