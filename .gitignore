@@ -5,6 +5,7 @@ dist/
 prisma/dev.db
 prisma/test.db
 prisma/scheduler-test.db
+prisma/votes-test.db
 prisma/*.db-journal
 .env
 .fly/
