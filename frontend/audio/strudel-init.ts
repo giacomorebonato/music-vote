@@ -21,7 +21,7 @@
  *   `applyPattern` cannot rely on `evaluate` rejecting. We pass `onEvalError`
  *   to `initStrudel` to capture the last error, then truthiness-check the
  *   returned pattern; a falsy result means the new pattern did not take and
- *   we report `{ ok: false, error: lastEvalError ?? 'evaluation failed' }`.
+ *   we report `{ ok: false, error: lastEvalError?.message ?? 'evaluation failed' }`.
  *
  * - Sound bank: @strudel/web ships no offline samples. The default
  *   `dirt-samples` bank on GitHub is ~170 MB, so bundling it is not viable.
