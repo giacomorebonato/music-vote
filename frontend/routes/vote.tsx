@@ -9,6 +9,48 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 type VoteSelection = { pollId: string; choice: string | null }
 
+export type VoteClaimController = {
+	/**
+	 * Resolves when the anonymous session is usable. Re-claims when the previous
+	 * attempt failed, so a phone that lost the claim request can still vote.
+	 */
+	ensure: () => Promise<void>
+}
+
+/**
+ * Tracks the one-time `mv_session` claim. The happy path claims once and every
+ * later caller awaits the same promise; a failed claim is retried on the next
+ * `ensure()` instead of bricking votes against a dead promise.
+ */
+export function createClaimController(
+	claim: () => Promise<unknown>,
+): VoteClaimController {
+	let pending: Promise<unknown> | null = null
+	let failed = false
+
+	function attempt(): Promise<unknown> {
+		failed = false
+		const next = claim()
+		pending = next
+		// Mark the failure without leaving an unhandled rejection on the stored
+		// promise; ensure() still rejects so the caller can surface the error.
+		void next.catch(() => {
+			failed = true
+		})
+		return next
+	}
+
+	return {
+		async ensure(): Promise<void> {
+			if (pending !== null && !failed) {
+				await pending
+				return
+			}
+			await attempt()
+		},
+	}
+}
+
 type VoteViewProps = {
 	roomStatus: string | null
 	poll: PollCardPoll | null
@@ -38,19 +80,22 @@ export function VoteRoute({ roomId }: { roomId: string }) {
 	const claimSession = useMutation(trpc.voting.claimSession.mutationOptions())
 	const castVote = useMutation(trpc.voting.castVote.mutationOptions())
 
+	const [claimController] = useState(() =>
+		createClaimController(() => claimSession.mutateAsync()),
+	)
+
 	const [selection, setSelection] = useState<VoteSelection | null>(null)
 	const [error, setError] = useState<string | null>(null)
 	const [nowMs, setNowMs] = useState(() => Date.now())
 
-	const claimRef = useRef<Promise<unknown> | null>(null)
 	const reconciledRef = useRef<string | null>(null)
 
-	// Anonymous session: claim the mv_session cookie once. handleVote awaits
-	// this promise so a fast tap cannot outrun the cookie set.
+	// Anonymous session: claim the mv_session cookie once on mount. handleVote
+	// awaits the same controller so a fast tap cannot outrun the cookie, and a
+	// failed claim is retried on the next vote instead of bricking the page.
 	useEffect(() => {
-		if (claimRef.current) return
-		claimRef.current = claimSession.mutateAsync()
-	}, [claimSession])
+		void claimController.ensure().catch(() => undefined)
+	}, [claimController])
 
 	// One ticker drives every countdown; cleared on unmount so navigating away
 	// cannot leak an interval.
@@ -92,6 +137,13 @@ export function VoteRoute({ roomId }: { roomId: string }) {
 	// return an open poll already past closesAt. Treat an expired poll as gone and
 	// refetch once per poll id so the phone never sits on a dead poll.
 	const activePoll = pollExpired ? null : poll
+	const activePollId = activePoll?.id ?? null
+
+	// A stale vote error (e.g. "Poll is closed") must not ride into the next
+	// poll's card once the active poll changes.
+	useEffect(() => {
+		setError(null)
+	}, [activePollId])
 
 	useEffect(() => {
 		if (!pollExpired || poll === null) return
@@ -105,9 +157,9 @@ export function VoteRoute({ roomId }: { roomId: string }) {
 			if (!activePoll) return
 			setError(null)
 			try {
-				// The mount effect starts the claim; awaiting it closes the window where a
-				// fast tap could beat the mv_session cookie.
-				await (claimRef.current ?? Promise.resolve())
+				// The mount effect starts the claim; ensure() reuses a settled claim or
+				// retries a failed one before the vote goes out.
+				await claimController.ensure()
 				await castVote.mutateAsync({ pollId: activePoll.id, choice })
 				setSelection({ pollId: activePoll.id, choice })
 			} catch (cause) {
@@ -123,7 +175,7 @@ export function VoteRoute({ roomId }: { roomId: string }) {
 				reconcile()
 			}
 		},
-		[activePoll, castVote, reconcile],
+		[activePoll, castVote, claimController, reconcile],
 	)
 
 	const selectionForPoll =
@@ -143,7 +195,11 @@ export function VoteRoute({ roomId }: { roomId: string }) {
 			pending={castVote.isPending}
 			error={error}
 			loadError={pollQuery.error?.message ?? null}
-			summaryPolls={ended ? (summaryQuery.data?.polls ?? []) : null}
+			summaryPolls={
+				ended && !summaryQuery.isPending
+					? (summaryQuery.data?.polls ?? [])
+					: null
+			}
 			onVote={(choice) => {
 				void handleVote(choice)
 			}}
@@ -178,7 +234,15 @@ export function VoteView({
 			/>
 		)
 	} else if (roomStatus === 'ended') {
-		body = <PollTimeline polls={summaryPolls ?? []} />
+		body =
+			summaryPolls === null ? (
+				<span
+					className="loading loading-spinner mx-auto"
+					data-testid="summary-loading"
+				/>
+			) : (
+				<PollTimeline polls={summaryPolls} />
+			)
 	} else if (roomStatus === 'outro') {
 		body = (
 			<WaitingStage

@@ -1,5 +1,5 @@
-import { expect, test } from 'bun:test'
-import { VoteView } from '@frontend/routes/vote'
+import { expect, mock, test } from 'bun:test'
+import { createClaimController, VoteView } from '@frontend/routes/vote'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 const noop = () => {}
@@ -39,6 +39,14 @@ test('ended renders the summary timeline, filtering undecided polls', () => {
 	expect(markup).not.toContain('Undecided?')
 })
 
+test('ended shows a summary spinner before the summary resolves', () => {
+	const markup = renderToStaticMarkup(
+		<VoteView {...baseProps} roomStatus="ended" summaryPolls={null} />,
+	)
+	expect(markup).toContain('data-testid="summary-loading"')
+	expect(markup).not.toContain('No polls were decided.')
+})
+
 test('live with an open poll renders the vote card', () => {
 	const markup = renderToStaticMarkup(
 		<VoteView
@@ -66,4 +74,30 @@ test('live with no open poll shows the next-poll wait', () => {
 		<VoteView {...baseProps} roomStatus="live" />,
 	)
 	expect(markup).toContain('Waiting for the next poll')
+})
+
+test('re-claims a failed session claim so a lost request does not brick voting', async () => {
+	const claim = mock(
+		(): Promise<unknown> => Promise.reject(new Error('network down')),
+	)
+	const controller = createClaimController(claim)
+
+	await expect(controller.ensure()).rejects.toThrow('network down')
+	expect(claim).toHaveBeenCalledTimes(1)
+
+	// The next attempt must really call claim() again, not reuse the dead promise.
+	claim.mockImplementationOnce(() => Promise.resolve({ token: 'session' }))
+	await controller.ensure()
+	expect(claim).toHaveBeenCalledTimes(2)
+})
+
+test('a successful claim is reused across votes', async () => {
+	const claim = mock(
+		(): Promise<unknown> => Promise.resolve({ token: 'session' }),
+	)
+	const controller = createClaimController(claim)
+
+	await controller.ensure()
+	await controller.ensure()
+	expect(claim).toHaveBeenCalledTimes(1)
 })
