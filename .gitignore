@@ -4,6 +4,7 @@ node_modules/
 dist/
 prisma/dev.db
 prisma/test.db
+prisma/scheduler-test.db
 prisma/*.db-journal
 .env
 .fly/

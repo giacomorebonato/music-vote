@@ -59,6 +59,7 @@ beforeAll(async () => {
 	}
 	mock.module('@backend/polls/scheduler', () => ({
 		armScheduler: mockScheduler,
+		disarmScheduler: jest.fn(),
 	}))
 	mock.module('@backend/llm/provider', () => ({
 		getLlmProvider: () => mockProvider,

@@ -6,7 +6,7 @@ import {
 	generateOutro,
 } from '@backend/music/engine'
 import type { StateDoc } from '@backend/music/state-doc'
-import { armScheduler } from '@backend/polls/scheduler'
+import { armScheduler, disarmScheduler } from '@backend/polls/scheduler'
 import { hub } from '@backend/realtime/hub'
 import type { createRoomSchema } from '@shared/schemas/room'
 import type { z } from 'zod'
@@ -131,6 +131,7 @@ export async function endRoom(
 		return
 	}
 
+	disarmScheduler(roomId)
 	await closeOpenPoll(roomId)
 
 	if (room.status === 'lobby') {
@@ -145,12 +146,14 @@ export async function endRoom(
 		doc,
 		room.currentCode ?? '',
 	)
+	const now = new Date()
 	const version = await prisma.patternVersion.create({
 		data: {
 			roomId,
 			code: outroCode,
 			source: 'outro',
 			status: 'candidate',
+			appliedAt: now,
 		},
 	})
 	hub.publishHost(roomId, {
@@ -230,7 +233,7 @@ export async function reportApplyResult(
 	const version = await prisma.patternVersion.findFirst({
 		where: { id: versionId, roomId },
 	})
-	if (!version || version.status !== 'candidate') {
+	if (version?.status !== 'candidate') {
 		throw new Error('Version not found or not a candidate')
 	}
 
