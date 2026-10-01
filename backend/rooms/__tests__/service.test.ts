@@ -10,7 +10,11 @@ import {
 import { execSync } from 'node:child_process'
 import { resolve } from 'node:path'
 import { MockLlmProvider } from '@backend/llm/provider'
-import { generateInitialPattern, generateOutro } from '@backend/music/engine'
+import {
+	generateInitialPattern,
+	generateOutro,
+	MusicGenError,
+} from '@backend/music/engine'
 import type { Context } from '@backend/trpc/context'
 import type { WsEvent } from '@shared/realtime/events'
 import { PrismaBunSqlite } from 'prisma-adapter-bun-sqlite'
@@ -182,7 +186,7 @@ test('undoLastChange reverts current code and marks version reverted', async () 
 			status: 'candidate',
 		},
 	})
-	await service.reportApplyResult(room.id, candidate.id, true)
+	await service.reportApplyResult(room.id, host.id, candidate.id, true)
 
 	await service.undoLastChange(room.id, host.id)
 
@@ -332,7 +336,13 @@ test('reportApplyResult(false) rejects version', async () => {
 		},
 	})
 
-	await service.reportApplyResult(room.id, candidate.id, false, 'too harsh')
+	await service.reportApplyResult(
+		room.id,
+		host.id,
+		candidate.id,
+		false,
+		'too harsh',
+	)
 
 	const version = await prisma.patternVersion.findUnique({
 		where: { id: candidate.id },
@@ -346,6 +356,32 @@ test('reportApplyResult(false) rejects version', async () => {
 		versionId: candidate.id,
 		error: 'too harsh',
 	})
+})
+
+test('reportApplyResult rejects a non-owner and leaves the version untouched', async () => {
+	const host = await makeHost()
+	const other = await makeHost()
+	const room = await service.createRoom(host.id, baseInput())
+	const candidate = await prisma.patternVersion.create({
+		data: {
+			roomId: room.id,
+			code: 'note("c2").s("sawtooth")',
+			source: 'evolution',
+			status: 'candidate',
+		},
+	})
+
+	await expect(
+		service.reportApplyResult(room.id, other.id, candidate.id, true),
+	).rejects.toThrow('Room not found or access denied')
+
+	const version = await prisma.patternVersion.findUnique({
+		where: { id: candidate.id },
+	})
+	expect(version?.status).toBe('candidate')
+
+	const updated = await prisma.room.findUnique({ where: { id: room.id } })
+	expect(updated?.currentCode).not.toBe(candidate.code)
 })
 
 test('router get returns FORBIDDEN for non-owner', async () => {
@@ -367,4 +403,78 @@ test('router get returns FORBIDDEN for non-owner', async () => {
 
 	expect(thrown).toBeDefined()
 	expect((thrown as { code?: string }).code).toBe('FORBIDDEN')
+})
+
+const outroEngineThatFails = {
+	generateInitialPattern,
+	generateNextQuestion: async () => 'More energy?',
+	generateOutro: async () => {
+		throw new MusicGenError('Failed to generate a valid outro after 2 attempts')
+	},
+}
+
+test('endRoom keeps the current pattern and still ends when outro generation fails', async () => {
+	const host = await makeHost()
+	const room = await service.createRoom(host.id, {
+		...baseInput(),
+		pollIntervalSec: 5,
+	})
+	await service.startRoom(room.id, host.id)
+	await prisma.poll.create({
+		data: {
+			roomId: room.id,
+			seq: 2,
+			kind: 'evolution',
+			question: 'More drums?',
+			options: [
+				{ key: 'yes', label: 'Yes' },
+				{ key: 'no', label: 'No' },
+			],
+			status: 'open',
+		},
+	})
+
+	jest.useFakeTimers()
+	await service.endRoom(room.id, host.id, outroEngineThatFails)
+
+	let updated = await prisma.room.findUnique({ where: { id: room.id } })
+	expect(updated?.status).toBe('outro')
+	expect(updated?.currentCode).toBe('s("bd sd cp hh")')
+
+	const versions = await prisma.patternVersion.findMany({
+		where: { roomId: room.id },
+	})
+	expect(versions).toHaveLength(1)
+	expect(versions[0].source).toBe('initial')
+
+	const hostEvents = hubSpies.publishHost.mock.calls as [string, WsEvent][]
+	expect(
+		hostEvents.some(
+			([, event]) => event.type === 'code_update' && event.kind === 'outro',
+		),
+	).toBe(false)
+	const warning = hostEvents.find(([, event]) => event.type === 'warning')
+	expect(warning).toBeDefined()
+	if (!warning) throw new Error('warning event missing')
+	expect(warning[1]).toEqual({
+		type: 'warning',
+		message: 'Outro generation failed; music unchanged',
+	})
+
+	jest.advanceTimersByTime(5000)
+	for (let i = 0; i < 20; i++) {
+		await Promise.resolve()
+		updated = await prisma.room.findUnique({ where: { id: room.id } })
+		if (updated?.status === 'ended') break
+	}
+	expect(updated?.status).toBe('ended')
+
+	const audienceEvents = hubSpies.publishAudience.mock.calls as [
+		string,
+		WsEvent,
+	][]
+	expect(audienceEvents.some(([, event]) => event.type === 'room_ended')).toBe(
+		true,
+	)
+	jest.useRealTimers()
 })

@@ -845,3 +845,65 @@ test('end poll continue sustains polling past insertAt', async () => {
 
 	scheduler.disarmScheduler(room.id)
 })
+
+test('restoreSchedulers overdue close replenishes the queue and the next poll opens', async () => {
+	const host = await makeHost()
+	const room = await makeRoom(host.id, { pollIntervalSec: 10 })
+	const now = new Date(fakeClock.now())
+	const overdue = await prisma.poll.create({
+		data: {
+			roomId: room.id,
+			seq: 1,
+			kind: 'evolution',
+			question: 'Overdue?',
+			options: [
+				{ key: 'yes', label: 'Yes' },
+				{ key: 'no', label: 'No' },
+			],
+			status: 'open',
+			openedAt: new Date(now.getTime() - 10000),
+			closesAt: new Date(now.getTime() - 1000),
+		},
+	})
+
+	await scheduler.restoreSchedulers()
+
+	const closed = await prisma.poll.findUnique({ where: { id: overdue.id } })
+	expect(closed?.status).toBe('closed')
+
+	// A crash while a poll was open leaves nothing queued (the design only keeps
+	// one question behind an open poll), so the restore path must queue the next
+	// question exactly like a normal closePoll does.
+	const queued = await prisma.poll.findMany({
+		where: { roomId: room.id, status: 'queued' },
+	})
+	expect(queued).toHaveLength(1)
+	expect(queued[0].kind).toBe('evolution')
+	expect(queued[0].seq).toBeGreaterThan(closed?.seq ?? 0)
+
+	// Restoring the host channel publication keeps the host console in sync.
+	const hostClosed = hostEvents().find((e) => e[1].type === 'poll_closed')
+	expect(hostClosed?.[0]).toBe(room.id)
+	expect(hostClosed?.[1]).toEqual({
+		type: 'poll_closed',
+		pollId: overdue.id,
+		winningOption: null,
+	})
+	const audienceClosed = audienceEvents().find(
+		(e) => e[1].type === 'poll_closed',
+	)
+	expect(audienceClosed?.[1]).toEqual(hostClosed?.[1])
+
+	// And that queued poll really opens, so evolution polls keep coming.
+	await fakeClock.tick(0)
+	const opened = audienceEvents().find(
+		(e) => e[1].type === 'poll_opened' && e[1].poll.id === queued[0].id,
+	)
+	expect(opened?.[0]).toBe(room.id)
+	expect(opened?.[1]).toMatchObject({
+		type: 'poll_opened',
+		poll: { id: queued[0].id, question: 'More energy?' },
+	})
+
+	scheduler.disarmScheduler(room.id)
+})

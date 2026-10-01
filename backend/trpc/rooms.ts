@@ -133,6 +133,7 @@ export const roomsRouter = t.router({
 			await requireRoomOwner(ctx.prisma, input.roomId, ctx.userId)
 			await reportApplyResult(
 				input.roomId,
+				ctx.userId,
 				input.versionId,
 				input.ok,
 				input.error,

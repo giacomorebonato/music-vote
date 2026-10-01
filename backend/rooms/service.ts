@@ -139,29 +139,26 @@ export async function endRoom(
 		return
 	}
 
-	const provider = getLlmProvider()
-	const doc = room.stateDoc as unknown as StateDoc
-	const outroCode = await engine.generateOutro(
-		provider,
-		doc,
-		room.currentCode ?? '',
-	)
-	const now = new Date()
-	const version = await prisma.patternVersion.create({
-		data: {
-			roomId,
+	const outroCode = await generateOutroOrWarn(roomId, room, engine)
+	if (outroCode !== null) {
+		const now = new Date()
+		const version = await prisma.patternVersion.create({
+			data: {
+				roomId,
+				code: outroCode,
+				source: 'outro',
+				status: 'candidate',
+				appliedAt: now,
+			},
+		})
+		hub.publishHost(roomId, {
+			type: 'code_update',
 			code: outroCode,
-			source: 'outro',
-			status: 'candidate',
-			appliedAt: now,
-		},
-	})
-	hub.publishHost(roomId, {
-		type: 'code_update',
-		code: outroCode,
-		versionId: version.id,
-		kind: 'outro',
-	})
+			versionId: version.id,
+			kind: 'outro',
+		})
+	}
+
 	await prisma.room.update({
 		where: { id: roomId },
 		data: { status: 'outro' },
@@ -169,6 +166,36 @@ export async function endRoom(
 	setTimeout(() => {
 		void finalizeRoomEnd(roomId)
 	}, room.pollIntervalSec * 1000)
+}
+
+/**
+ * Generates the outro pattern, or `null` when generation fails.
+ *
+ * Spec failure table: an LLM outage must not break the end sequence. A failed
+ * outro is treated as "no outro code change" (same philosophy as a failed
+ * evolution): the current pattern keeps playing, the room still transitions to
+ * `outro`, and the audience still gets the summary.
+ */
+async function generateOutroOrWarn(
+	roomId: string,
+	room: Room,
+	engine: EngineDeps,
+): Promise<string | null> {
+	try {
+		return await engine.generateOutro(
+			getLlmProvider(),
+			room.stateDoc as unknown as StateDoc,
+			room.currentCode ?? '',
+		)
+	} catch (error) {
+		// biome-ignore lint/suspicious/noConsole: scheduler logs no-change polls
+		console.info(`Outro generation failed for room ${roomId}: ${String(error)}`)
+		hub.publishHost(roomId, {
+			type: 'warning',
+			message: 'Outro generation failed; music unchanged',
+		})
+		return null
+	}
 }
 
 export async function undoLastChange(
@@ -226,10 +253,16 @@ export async function skipPoll(roomId: string, hostId: string): Promise<void> {
 
 export async function reportApplyResult(
 	roomId: string,
+	hostId: string,
 	versionId: string,
 	ok: boolean,
 	error?: string,
 ): Promise<void> {
+	const room = await prisma.room.findUnique({ where: { id: roomId } })
+	if (!room || room.hostId !== hostId) {
+		throw new Error('Room not found or access denied')
+	}
+
 	const version = await prisma.patternVersion.findFirst({
 		where: { id: versionId, roomId },
 	})

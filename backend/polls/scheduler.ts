@@ -492,11 +492,19 @@ export async function restoreSchedulers(): Promise<void> {
 				where: { id: overdue.id },
 				data: { status: 'closed', winningOption: null },
 			})
-			hub.publishAudience(room.id, {
+			const closed: WsEvent = {
 				type: 'poll_closed',
 				pollId: overdue.id,
 				winningOption: null,
-			})
+			}
+			hub.publishAudience(room.id, closed)
+			hub.publishHost(room.id, closed)
+			// A crash while a poll was open leaves the queue empty (the design only
+			// keeps a question behind an open poll), so the overdue close has to
+			// replenish it like closePoll does or evolution polls stop for the set.
+			if (overdue.kind === 'evolution') {
+				await queueNextEvolution(room.id, room)
+			}
 		}
 		armScheduler(room.id)
 	}
