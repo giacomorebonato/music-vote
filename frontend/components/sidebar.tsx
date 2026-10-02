@@ -25,6 +25,17 @@ export function Sidebar() {
 						Home
 					</Link>
 				</li>
+				{signedIn ? (
+					<li>
+						<Link
+							to="/create"
+							activeProps={{ className: 'menu-active' }}
+							activeOptions={{ exact: true }}
+						>
+							Create room
+						</Link>
+					</li>
+				) : null}
 			</ul>
 
 			{signedIn && user?.email ? (
