@@ -2,52 +2,7 @@
 @import "tailwindcss";
 
 @plugin "daisyui" {
-	themes: false;
-}
-
-@plugin "daisyui/theme" {
-	name: "mino";
-	default: true;
-	color-scheme: light;
-
-	/* paper + ink */
-	--color-base-100: #f7f8fa;
-	--color-base-200: #eef1f5;
-	--color-base-300: #e2e6ed;
-	--color-base-content: #14171c;
-
-	/* cobalt — primary actions */
-	--color-primary: #3b5bdb;
-	--color-primary-content: #ffffff;
-
-	/* amber — secondary / warm contrast */
-	--color-secondary: #b45309;
-	--color-secondary-content: #ffffff;
-
-	/* teal — accent / highlights */
-	--color-accent: #0e7c7b;
-	--color-accent-content: #ffffff;
-
-	/* ink neutral */
-	--color-neutral: #14171c;
-	--color-neutral-content: #f7f8fa;
-
-	--color-info: #2563eb;
-	--color-info-content: #ffffff;
-	--color-success: #16a34a;
-	--color-success-content: #ffffff;
-	--color-warning: #d97706;
-	--color-warning-content: #ffffff;
-	--color-error: #dc2626;
-	--color-error-content: #ffffff;
-
-	--radius-selector: 0.375rem;
-	--radius-field: 0.5rem;
-	--radius-box: 0.75rem;
-	--size-selector: 0.25rem;
-	--border: 1px;
-	--depth: 1;
-	--noise: 0;
+	themes: synthwave --default;
 }
 
 :root {
