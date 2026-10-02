@@ -61,7 +61,9 @@ import {
 	samples,
 } from '@strudel/web'
 
-export type ApplyResult = { ok: true } | { ok: false; error: string }
+export type ApplyResult =
+	| { ok: true; audioRunning: boolean }
+	| { ok: false; error: string }
 
 let initPromise: Promise<unknown> | null = null
 let lastEvalError: Error | null = null
@@ -119,6 +121,32 @@ async function warmCoreDrums(): Promise<void> {
 	}
 }
 
+/**
+ * Try to start the audio clock without a user gesture.
+ *
+ * A reloaded host document has no user activation, so browsers that enforce
+ * their autoplay policy keep the AudioContext suspended even though the
+ * pattern is already scheduled (Strudel only unlocks on a one-time document
+ * `mousedown`). `resume()` succeeds where the browser permits it (prior
+ * engagement with the origin, autoplay allowed) and is otherwise a no-op —
+ * callers learn the concrete state from the returned boolean.
+ */
+export async function resumeAudio(): Promise<boolean> {
+	const ac = getAudioContext() as AudioContext | null
+	if (!ac) return false
+	if (ac.state === 'running') return true
+	try {
+		await ac.resume()
+	} catch {
+		// Chrome rejects the promise without a gesture; re-check anyway in case
+		// the state flipped asynchronously.
+	}
+	// `resume()` can flip the state asynchronously, but TS keeps the
+	// post-early-return narrowing — widen before re-checking.
+	const state = ac.state as AudioContext['state']
+	return state === 'running'
+}
+
 export async function applyPattern(
 	code: string,
 	autoplay = true,
@@ -133,7 +161,11 @@ export async function applyPattern(
 				error: getLastEvalErrorMessage() ?? 'evaluation failed',
 			}
 		}
-		return { ok: true }
+		// Re-evaluated patterns keep the old loop playing until swapped; a
+		// suspended clock (fresh reload, no gesture yet) does not tick, so the
+		// caller needs to know and can put a single obvious unlock in front of it.
+		const audioRunning = autoplay ? await resumeAudio() : true
+		return { ok: true, audioRunning }
 	} catch (err) {
 		const error = err instanceof Error ? err.message : String(err)
 		return { ok: false, error }

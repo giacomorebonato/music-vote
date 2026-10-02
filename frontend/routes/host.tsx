@@ -1,4 +1,5 @@
 import type { ApplyResult } from '@frontend/audio/strudel-init'
+import { resumeAudio } from '@frontend/audio/strudel-init'
 import {
 	StrudelPlayer,
 	type StrudelPlayerRef,
@@ -13,6 +14,7 @@ import {
 	reduceApplyStatus,
 } from '@frontend/lib/apply-status'
 import { authClient } from '@frontend/lib/auth'
+import { pickPendingCandidate } from '@frontend/lib/pending-candidate'
 import { useRoomChannel } from '@frontend/lib/room-ws'
 import { useTRPC } from '@frontend/lib/trpc'
 import type { CodeUpdateEvent, WsEvent } from '@shared/realtime/events'
@@ -77,10 +79,16 @@ function HostConsole({ roomId }: { roomId: string }) {
 	// evolution `code_update` frame): the model call is seconds-long and the host
 	// should see that work instead of a silent gap.
 	const [pendingEvolution, setPendingEvolution] = useState(false)
+	// True when the AudioContext is suspended (browser autoplay policy) —
+	// set from `applyPattern` results, cleared by the unlock effect below.
+	const [audioBlocked, setAudioBlocked] = useState(false)
 
 	const playerRef = useRef<StrudelPlayerRef | null>(null)
 	const seededRef = useRef(false)
 	const appliedCodeRef = useRef<string | null>(null)
+	// Reconcile bookkeeping: candidate versionIds this page already tried to
+	// apply (see the missed-frame replay effect below).
+	const attemptedCandidateRef = useRef<Set<string>>(new Set())
 	const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 	// Monotonic badge tokens, and the token reserved by an Undo click so the
 	// undo's own `code_update` frame shares it (see `frontend/lib/apply-status`).
@@ -132,17 +140,24 @@ function HostConsole({ roomId }: { roomId: string }) {
 
 	// Seed apply: the player receives the room's current code once. Later
 	// updates arrive as `code_update` events and go through the ref so the
-	// matching versionId can be reported back to the server.
+	// matching versionId can be reported back to the server. When a pending
+	// candidate exists, the replay effect below owns the first apply — seeding
+	// the (older) currentCode would race it and could leave the stale pattern
+	// playing.
 	const currentCode = room?.currentCode ?? null
+	const pendingCandidate = roomQuery.data
+		? pickPendingCandidate(roomQuery.data.versions, room?.status)
+		: null
 	useEffect(() => {
 		if (currentCode === null) return
-		setDisplayCode(currentCode)
 		if (seededRef.current) return
+		if (pendingCandidate !== null) return
 		if (appliedCodeRef.current === currentCode) return
+		setDisplayCode(currentCode)
 		seededRef.current = true
 		appliedCodeRef.current = currentCode
 		setPlayerCode(currentCode)
-	}, [currentCode])
+	}, [currentCode, pendingCandidate])
 
 	// The server stops publishing code once the outro finishes, so the host
 	// browser has to hush the engine itself. Keyed on the status string so it
@@ -176,6 +191,9 @@ function HostConsole({ roomId }: { roomId: string }) {
 				},
 				{
 					onError: (error) => {
+						// The confirmation never reached the server: unblock the
+						// reconcile retry so a later refetch can confirm it.
+						attemptedCandidateRef.current.delete(event.versionId)
 						showToast(`Change not confirmed: ${error.message}`)
 					},
 				},
@@ -217,19 +235,31 @@ function HostConsole({ roomId }: { roomId: string }) {
 				event.kind === 'undo'
 					? { type: 'reverted', seq }
 					: { type: 'applied', seq }
-			void player.applyPattern(event.code).then((result) => {
-				if (result.ok) {
-					setDisplayCode(event.code)
-					dispatchApplyStatus(successFact)
-				} else {
-					dispatchApplyStatus({
-						type: 'failed',
-						seq,
-						error: result.error,
-					})
-				}
-				reportApply(event, result)
-			})
+			void player
+				.applyPattern(event.code)
+				.then((result) => {
+					if (result.ok) {
+						setAudioBlocked(!result.audioRunning)
+						setDisplayCode(event.code)
+						dispatchApplyStatus(successFact)
+					} else {
+						dispatchApplyStatus({
+							type: 'failed',
+							seq,
+							error: result.error,
+						})
+					}
+					reportApply(event, result)
+				})
+				.catch((error: unknown) => {
+					// applyPattern is not supposed to reject, but an unsettled apply
+					// would otherwise orphan the candidate version silently — report
+					// the rejection so the server records it and the badge shows it.
+					const message =
+						error instanceof Error ? error.message : 'apply crashed'
+					dispatchApplyStatus({ type: 'failed', seq, error: message })
+					reportApply(event, { ok: false, error: message })
+				})
 		},
 		[claimSeqForFrame, dispatchApplyStatus, reportApply],
 	)
@@ -295,7 +325,10 @@ function HostConsole({ roomId }: { roomId: string }) {
 	)
 
 	// Spec "Host WS drop": the browser is the audio engine, so a dropped socket
-	// means playback may have stopped. Refetch the server truth and re-apply.
+	// means playback may have stopped. Refetch the server truth and re-apply —
+	// preferring a pending candidate, which is newer than `currentCode` (the
+	// WS frames publishing it may have been lost while offline) — and confirm
+	// it so the server advances `currentCode`.
 	const handleReconnect = useCallback(() => {
 		// No way to learn whether a generation was mid-flight while offline; a
 		// stale indicator is worse than a missed one, so drop it on resync.
@@ -305,12 +338,33 @@ function HostConsole({ roomId }: { roomId: string }) {
 				const fresh = await queryClient.fetchQuery(
 					trpc.rooms.get.queryOptions({ roomId }),
 				)
-				const code = fresh.room.currentCode
+				const pending = pickPendingCandidate(fresh.versions, fresh.room.status)
+				const code = pending?.code ?? fresh.room.currentCode
 				if (code === null) return
 				appliedCodeRef.current = code
 				setDisplayCode(code)
 				const result = await playerRef.current?.applyPattern(code)
-				if (result && !result.ok) showToast(`Audio error: ${result.error}`)
+				if (result) {
+					if (result.ok) setAudioBlocked(!result.audioRunning)
+					else showToast(`Audio error: ${result.error}`)
+				}
+				if (pending && result) {
+					if (attemptedCandidateRef.current.has(pending.versionId)) return
+					attemptedCandidateRef.current.add(pending.versionId)
+					reportApplyResult.mutate(
+						{
+							roomId,
+							versionId: pending.versionId,
+							ok: result.ok,
+							error: result.ok ? undefined : result.error,
+						},
+						{
+							onError: () => {
+								attemptedCandidateRef.current.delete(pending.versionId)
+							},
+						},
+					)
+				}
 			} catch (error) {
 				showToast(
 					error instanceof Error
@@ -319,12 +373,45 @@ function HostConsole({ roomId }: { roomId: string }) {
 				)
 			}
 		})()
-	}, [queryClient, roomId, showToast, trpc])
+	}, [queryClient, reportApplyResult, roomId, showToast, trpc])
+
+	// One-shot unlock while audio is blocked: browsers only restore a suspended
+	// AudioContext from a user activation, and Strudel's own hook listens for
+	// `mousedown` only — keyboard-only activation would otherwise never play.
+	// Any interaction (pointer/key/touch) gets a resume attempt; a success clears
+	// the badge. Re-registered per blocked period so consecutive blocks re-arm.
+	useEffect(() => {
+		if (!audioBlocked) return
+		const unlock = (): void => {
+			void resumeAudio().then((running) => {
+				if (running) setAudioBlocked(false)
+			})
+		}
+		const types = ['pointerdown', 'keydown', 'touchstart'] as const
+		for (const type of types) window.addEventListener(type, unlock)
+		return () => {
+			for (const type of types) window.removeEventListener(type, unlock)
+		}
+	}, [audioBlocked])
 
 	const { connected } = useRoomChannel(roomId, {
 		onEvent: handleEvent,
 		onReconnect: handleReconnect,
 	})
+
+	// Missed-frame replay: a `code_update` is published exactly once, so a host
+	// page that reloaded (or dropped the socket) mid-evolution never sees it —
+	// the candidate version then sits unapplied and `currentCode` stays frozen
+	// on the previous pattern. rooms.get already returns every version row, so
+	// reconcile the newest pending candidate on each fetch: apply it and report
+	// the result through the same code_update path. Attempted once per version;
+	// reportApply's onError unblocks a retry when the confirmation is lost.
+	useEffect(() => {
+		if (!pendingCandidate) return
+		if (attemptedCandidateRef.current.has(pendingCandidate.versionId)) return
+		attemptedCandidateRef.current.add(pendingCandidate.versionId)
+		handleCodeUpdate(pendingCandidate)
+	}, [pendingCandidate, handleCodeUpdate])
 
 	const voteUrl =
 		typeof window === 'undefined' ? '' : `${window.location.origin}/r/${roomId}`
@@ -410,6 +497,16 @@ function HostConsole({ roomId }: { roomId: string }) {
 				{room.status === 'outro' ? (
 					<div className="alert">
 						<span>Outro playing — the room ends after the outro bar.</span>
+					</div>
+				) : null}
+
+				{audioBlocked && (room.status === 'live' || room.status === 'outro') ? (
+					<div
+						className="alert alert-warning cursor-pointer"
+						data-testid="audio-resume"
+						role="alert"
+					>
+						<span>Playback paused — click or press any key to resume.</span>
 					</div>
 				) : null}
 
@@ -529,8 +626,8 @@ function HostConsole({ roomId }: { roomId: string }) {
 				</div>
 
 				<p className="text-xs opacity-60">
-					Click anywhere to unlock audio — browsers never resume audio from
-					keyboard-only activation.
+					Audio needs one interaction per page load — a click or any key resumes
+					a silent set after a refresh.
 				</p>
 
 				{applyStatusState.status ? (

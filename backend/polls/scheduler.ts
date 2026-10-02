@@ -232,10 +232,55 @@ async function liveTick(roomId: string, intervalMs: number): Promise<void> {
 		return
 	}
 
-	await openNextQueuedPoll(roomId)
+	try {
+		await healPollChain(roomId, room, now)
+	} catch (error) {
+		// biome-ignore lint/suspicious/noConsole: scheduler poll-chain faults must reach the deploy logs
+		console.error(`Poll tick maintenance failed in room ${roomId}`, error)
+	}
 	scheduler.intervalHandle = clock.setTimeout(async () => {
 		await liveTick(roomId, intervalMs)
 	}, intervalMs)
+}
+
+/**
+ * Keep a live room's poll chain moving on every tick.
+ *
+ * A lost close timer (crash mid-close, hot reload) leaves an overdue open poll
+ * that blocks openNextQueuedPoll forever, and a failed close can leave the room
+ * with no open and no queued poll at all — the vote page then waits forever and
+ * the set silently stops evolving. Close the overdue poll first, then open the
+ * next queued one, and rebuild the queue when nothing is pending (the guards
+ * inside queueNextEvolution keep the rebuild a no-op past the end-poll insert
+ * point).
+ */
+async function healPollChain(
+	roomId: string,
+	room: Room,
+	now: number,
+): Promise<void> {
+	const stale = await prisma.poll.findFirst({
+		where: { roomId, status: 'open' },
+	})
+	if (stale?.closesAt && stale.closesAt.getTime() <= now) {
+		await closePoll(stale.id, roomId)
+	}
+	await openNextQueuedPoll(roomId)
+	const openPoll = await prisma.poll.findFirst({
+		where: { roomId, status: 'open' },
+	})
+	if (openPoll) return
+	const queuedPoll = await prisma.poll.findFirst({
+		where: { roomId, status: 'queued' },
+	})
+	if (queuedPoll) return
+	try {
+		await queueNextEvolution(roomId, room)
+	} catch (error) {
+		// biome-ignore lint/suspicious/noConsole: scheduler poll-chain faults must reach the deploy logs
+		console.error(`Poll chain rebuild failed for ${roomId}`, error)
+	}
+	await openNextQueuedPoll(roomId)
 }
 
 async function armOutro(room: Room): Promise<void> {
@@ -391,26 +436,94 @@ async function closePoll(pollId: string, roomId: string): Promise<void> {
 	hub.publishAudience(roomId, closed)
 	hub.publishHost(roomId, closed)
 
-	if (winner) {
-		const winnerLabel =
-			options.find((option) => option.key === winner)?.label ?? winner
+	if (winner) await applyPollOutcome(roomId, room, poll, options, winner)
+
+	if (poll.kind === 'evolution') {
+		await queueNextEvolutionAfterClose(roomId, room)
+	}
+}
+
+/**
+ * Act on a closed poll's winning option. A crash anywhere in here (LLM outage,
+ * DB busy) must not kill the close: it is logged, the host is warned that the
+ * music is unchanged, and the poll chain heals on the next liveTick.
+ */
+async function applyPollOutcome(
+	roomId: string,
+	room: Room,
+	poll: { id: string; kind: string; question: string },
+	options: PollOption[],
+	winner: string,
+): Promise<void> {
+	const winnerLabel =
+		options.find((option) => option.key === winner)?.label ?? winner
+	try {
 		if (poll.kind === 'end') {
-			if (winner === 'wrap') {
-				await triggerEndRoom(roomId, room.hostId)
-			} else if (winner === 'continue') {
-				const current = active.get(roomId)
-				if (current) current.continuing = true
-				await queueNextEvolution(roomId, room, { afterContinue: true })
-				await openNextQueuedPoll(roomId)
-			}
+			await applyEndPollOutcome(roomId, room, winner)
 		} else if (poll.kind === 'evolution') {
 			// The prompt needs the human-readable change, not the storage key.
 			await runEvolution(room, poll, winnerLabel)
 		}
+	} catch (error) {
+		// biome-ignore lint/suspicious/noConsole: scheduler poll-chain faults must reach the deploy logs
+		console.error(`Poll ${poll.id} winner handling crashed`, error)
+		hub.publishHost(roomId, {
+			type: 'warning',
+			message: 'Evolution poll failed; music unchanged',
+		})
 	}
+}
 
-	if (poll.kind === 'evolution') {
+async function applyEndPollOutcome(
+	roomId: string,
+	room: Room,
+	winner: string,
+): Promise<void> {
+	if (winner === 'wrap') {
+		await triggerEndRoom(roomId, room.hostId)
+		return
+	}
+	if (winner === 'continue') {
+		const current = active.get(roomId)
+		if (current) current.continuing = true
+		await queueNextEvolution(roomId, room, { afterContinue: true })
+		await openNextQueuedPoll(roomId)
+	}
+}
+
+/**
+ * Timing guards for the next evolution question. Rooms only poll before the
+ * end-poll insert point (75% of the set); a "keep going" win suspends that
+ * limit for the rest of the set, but never past the room's end time.
+ */
+function shouldQueueNextEvolution(
+	roomId: string,
+	room: Room,
+	opts?: { afterContinue?: boolean },
+): boolean {
+	const now = clock.now()
+	const insertAt = room.createdAt.getTime() + room.lengthSec * 750
+	const intervalMs = tickIntervalMSec(room.pollIntervalSec)
+
+	const scheduler = active.get(roomId)
+	if (scheduler?.continuing) {
+		const endAt = room.createdAt.getTime() + room.lengthSec * 1000
+		return now + intervalMs < endAt
+	}
+	if (opts?.afterContinue) return true
+	return now < insertAt && now + intervalMs < insertAt
+}
+
+async function queueNextEvolutionAfterClose(
+	roomId: string,
+	room: Room,
+): Promise<void> {
+	try {
 		await queueNextEvolution(roomId, room)
+	} catch (error) {
+		// biome-ignore lint/suspicious/noConsole: scheduler poll-chain faults must reach the deploy logs
+		console.error(`Failed to queue the next evolution for ${roomId}`, error)
+		// The next liveTick's self-heal retries the queue rebuild.
 	}
 }
 
@@ -420,9 +533,17 @@ async function runEvolution(
 	winner: string,
 ): Promise<void> {
 	const provider = getLlmProvider()
+	// Overlapping closes are the norm (a poll can close while the previous
+	// evolution's LLM call is still pending), so the room snapshot taken at
+	// closePoll time can be stale. Re-read for the prompt so history reflects
+	// every applied change, not just the ones this close happened to see.
+	const fresh = await prisma.room.findUnique({ where: { id: room.id } })
+	const doc =
+		(fresh?.stateDoc as unknown as StateDoc | undefined) ??
+		(room.stateDoc as unknown as StateDoc)
 	const result = await generateEvolution(
 		provider,
-		room.stateDoc as unknown as StateDoc,
+		doc,
 		poll.question,
 		winner,
 		room.currentCode ?? '',
@@ -462,12 +583,15 @@ async function updateRoomDoc(
 	winner: string,
 	changeSummary: string | null,
 ): Promise<void> {
-	const next = applyChange(
-		room.stateDoc as unknown as StateDoc,
-		question,
-		winner,
-		changeSummary,
-	)
+	// Read-modify-write on a FRESH stateDoc: the Room row passed in was read
+	// before a seconds-long LLM call, and a concurrent closePoll may have
+	// appended its own history entry meanwhile. Writing the stale snapshot
+	// would clobber that entry (lost update) and corrupt the MC's memory.
+	const fresh = await prisma.room.findUnique({ where: { id: room.id } })
+	const base =
+		(fresh?.stateDoc as unknown as StateDoc | undefined) ??
+		(room.stateDoc as unknown as StateDoc)
+	const next = applyChange(base, question, winner, changeSummary)
 	await prisma.room.update({
 		where: { id: room.id },
 		data: { stateDoc: next as unknown as Prisma.InputJsonObject },
@@ -488,18 +612,7 @@ async function queueNextEvolution(
 	})
 	if (existingEnd) return
 
-	const now = clock.now()
-	const insertAt = room.createdAt.getTime() + room.lengthSec * 750
-	const intervalMs = tickIntervalMSec(room.pollIntervalSec)
-
-	const scheduler = active.get(roomId)
-	if (scheduler?.continuing) {
-		const endAt = room.createdAt.getTime() + room.lengthSec * 1000
-		if (now + intervalMs >= endAt) return
-	} else if (!opts?.afterContinue) {
-		if (now >= insertAt) return
-		if (now + intervalMs >= insertAt) return
-	}
+	if (!shouldQueueNextEvolution(roomId, room, opts)) return
 
 	const last = await prisma.poll.findFirst({
 		where: { roomId },
@@ -507,10 +620,14 @@ async function queueNextEvolution(
 	})
 	const seq = (last?.seq ?? 0) + 1
 	const provider = getLlmProvider()
-	const generated = await generateNextQuestion(
-		provider,
-		room.stateDoc as unknown as StateDoc,
-	)
+	// Fresh stateDoc for the question: polls overlap, so the Room snapshot
+	// from closePoll time can predate a concurrent evolution's history entry —
+	// the question must not describe a change that already landed.
+	const fresh = await prisma.room.findUnique({ where: { id: roomId } })
+	const doc =
+		(fresh?.stateDoc as unknown as StateDoc | undefined) ??
+		(room.stateDoc as unknown as StateDoc)
+	const generated = await generateNextQuestion(provider, doc)
 	await prisma.poll.create({
 		data: {
 			roomId,

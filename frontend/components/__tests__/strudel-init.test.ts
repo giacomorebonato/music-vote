@@ -5,7 +5,7 @@ const hush = mock(() => undefined)
 const evaluate = mock(() => Promise.resolve(undefined as unknown))
 const samples = mock(() => Promise.resolve())
 const loadBuffer = mock(() => Promise.resolve())
-const getAudioContext = mock(() => null)
+const getAudioContext = mock((): AudioContext | null => null)
 const getSound = mock(() => null)
 const getSampleInfo = mock(() => ({
 	url: 'https://example.com/sample.wav',
@@ -23,9 +23,85 @@ mock.module('@strudel/web', () => ({
 	getSampleInfo,
 }))
 
-const { applyPattern, stopStrudel, initStrudelOnce } = await import(
-	'@frontend/audio/strudel-init'
-)
+const { applyPattern, stopStrudel, initStrudelOnce, resumeAudio } =
+	await import('@frontend/audio/strudel-init')
+
+function audioContextFake(
+	state: string,
+	resumeFlipsState = false,
+): AudioContext {
+	const ctx = {
+		state,
+		resume: async () => {
+			if (resumeFlipsState) ctx.state = 'running'
+		},
+	}
+	return ctx as unknown as AudioContext
+}
+
+// --- resumeAudio ---
+
+test('resumeAudio: false when there is no AudioContext', async () => {
+	getAudioContext.mockImplementationOnce(() => null as unknown as AudioContext)
+	expect(await resumeAudio()).toBe(false)
+})
+
+test('resumeAudio: true for an already-running context', async () => {
+	getAudioContext.mockImplementationOnce(
+		() => audioContextFake('running') as unknown as AudioContext,
+	)
+	expect(await resumeAudio()).toBe(true)
+})
+
+test('resumeAudio: resumes a suspended context and reports running', async () => {
+	getAudioContext.mockImplementationOnce(
+		() => audioContextFake('suspended', true) as unknown as AudioContext,
+	)
+	expect(await resumeAudio()).toBe(true)
+})
+
+test('resumeAudio: reports false when resume leaves the context suspended', async () => {
+	getAudioContext.mockImplementationOnce(
+		() => audioContextFake('suspended') as unknown as AudioContext,
+	)
+	expect(await resumeAudio()).toBe(false)
+})
+
+test('applyPattern: reports audioRunning true when the context resumes', async () => {
+	evaluate.mockImplementationOnce(() =>
+		Promise.resolve({ __pattern: true } as unknown),
+	)
+	getAudioContext.mockImplementationOnce(
+		() => audioContextFake('suspended', true) as unknown as AudioContext,
+	)
+	const result = await applyPattern('s("bd sd")')
+	expect(result.ok).toBe(true)
+	if (result.ok) expect(result.audioRunning).toBe(true)
+})
+
+test('applyPattern: reports audioRunning false when audio stays blocked', async () => {
+	evaluate.mockImplementationOnce(() =>
+		Promise.resolve({ __pattern: true } as unknown),
+	)
+	getAudioContext.mockImplementationOnce(
+		() => audioContextFake('suspended') as unknown as AudioContext,
+	)
+	const result = await applyPattern('s("bd sd")')
+	expect(result.ok).toBe(true)
+	if (result.ok) expect(result.audioRunning).toBe(false)
+})
+
+test('applyPattern: skips the audio resume check when autoplay is off', async () => {
+	// Mock calls accumulate across this file's tests; clear first.
+	getAudioContext.mockClear()
+	evaluate.mockImplementationOnce(() =>
+		Promise.resolve({ __pattern: true } as unknown),
+	)
+	const result = await applyPattern('s("bd sd")', false)
+	expect(result.ok).toBe(true)
+	if (result.ok) expect(result.audioRunning).toBe(true)
+	expect(getAudioContext).not.toHaveBeenCalled()
+})
 
 test('applyPattern reports success for valid code', async () => {
 	evaluate.mockImplementationOnce(() =>

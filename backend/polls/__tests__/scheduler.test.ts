@@ -85,6 +85,60 @@ function createFakeClock(start = 0): FakeClock {
 	return { now, setTimeout, clearTimeout, tick, setTime }
 }
 
+/**
+ * Fire-and-forget clock: due timers start but are NOT awaited, so a slow
+ * closePoll (seconds-long LLM call) runs concurrently with later ticks — the
+ * production overlap the fully-awaited fakeClock cannot express.
+ */
+function createConcurrentClock(start = 0) {
+	let time = start
+	let nextId = 1
+	const timers = new Map<
+		number,
+		{ at: number; cb: () => void | Promise<void> }
+	>()
+	const clock = {
+		now: (): number => time,
+		setTimeout(callback: () => void | Promise<void>, ms: number): number {
+			const id = nextId++
+			timers.set(id, { at: time + ms, cb: callback })
+			return id
+		},
+		clearTimeout(id: number): void {
+			timers.delete(id)
+		},
+		setTime(next: number): void {
+			time = next
+		},
+		advance(ms: number): void {
+			time += ms
+		},
+		/** Fire every due timer without awaiting it, then let promise chains settle. */
+		async settle(rounds = 40): Promise<void> {
+			let emptyRounds = 0
+			for (let i = 0; i < rounds; i++) {
+				const due = [...timers.entries()]
+					.filter(([, timer]) => timer.at <= time)
+					.sort((a, b) => a[1].at - b[1].at)
+				for (const [id, timer] of due) {
+					timers.delete(id)
+					void Promise.resolve(timer.cb()).catch(() => {})
+				}
+				await new Promise((resolve) => realSetTimeout(resolve, 0))
+				// Keep draining while async chains (prisma I/O, deferred LLM
+				// promises) may still register timers or finish writes.
+				if (due.length === 0) {
+					emptyRounds += 1
+					if (emptyRounds >= 5) break
+				} else {
+					emptyRounds = 0
+				}
+			}
+		},
+	}
+	return clock
+}
+
 const createdUserIds: string[] = []
 let scheduler: typeof import('@backend/polls/scheduler')
 let service: typeof import('@backend/rooms/service')
@@ -368,6 +422,218 @@ test('evolution close feeds the winning option label to the LLM and queues chang
 		{ key: 'more-energy', label: 'more energy' },
 		{ key: 'deeper-darker-groove', label: 'deeper, darker groove' },
 	])
+
+	scheduler.disarmScheduler(room.id)
+})
+
+test('overlapping closes keep both stateDoc history entries (no stale snapshot clobber)', async () => {
+	// Production shape: poll2 closes while poll1's evolution LLM call is still
+	// pending. closePoll reads `room` once and, without a refresh, poll1's
+	// late updateRoomDoc would write back a snapshot that predates poll2's
+	// entry and clobber it.
+	const clock = createConcurrentClock()
+	scheduler.setSchedulerClock(clock)
+	const host = await makeHost()
+	const room = await makeRoom(host.id, { pollIntervalSec: 10 })
+	clock.setTime(room.createdAt.getTime())
+
+	try {
+		const poll1 = await makePoll(room.id, 1, { question: 'First change?' })
+		await makePoll(room.id, 2, { question: 'Second change?' })
+
+		scheduler.armScheduler(room.id)
+		await clock.settle() // poll1 opens, closes at +5s (fast mode window)
+		await vote(poll1.id, 'yes', 'v1')
+
+		let resolveEvolution: (value: {
+			code: string
+			changeSummary: string
+		}) => void = () => {}
+		const pendingEvolution = new Promise<{
+			code: string
+			changeSummary: string
+		}>((resolve) => {
+			resolveEvolution = resolve
+		})
+		mockGenerateEvolution.mockImplementationOnce(() => pendingEvolution)
+
+		clock.advance(5_000)
+		await clock.settle() // closePoll(poll1) starts and parks on the LLM call
+		const parked = await prisma.poll.findUnique({ where: { id: poll1.id } })
+		expect(parked?.status).toBe('closed')
+
+		clock.advance(5_000)
+		await clock.settle() // tick at +10s opens poll2; it closes at +15s
+		const openPoll2 = await prisma.poll.findFirst({
+			where: { roomId: room.id, status: 'open' },
+		})
+		expect(openPoll2?.question).toBe('Second change?')
+		if (!openPoll2) throw new Error('poll2 never opened')
+		await vote(openPoll2.id, 'yes', 'v2')
+
+		clock.advance(5_000)
+		await clock.settle() // closePoll(poll2) completes fully
+		const midHistory = await prisma.room.findUnique({ where: { id: room.id } })
+		const midDoc = (midHistory?.stateDoc ?? {
+			history: [] as { question: string }[],
+		}) as { history?: { question: string }[] }
+		expect((midDoc.history ?? []).map((entry) => entry.question)).toContain(
+			'Second change?',
+		)
+
+		// poll1's evolution finally lands — its stateDoc write must not clobber
+		// poll2's history entry with the pre-LLM snapshot.
+		resolveEvolution({ code: 's("bd hh")', changeSummary: 'first change' })
+		await clock.settle()
+
+		const after = await prisma.room.findUnique({ where: { id: room.id } })
+		const afterDoc = (after?.stateDoc ?? {
+			history: [] as { question: string }[],
+		}) as { history?: { question: string }[] }
+		const questions = (afterDoc.history ?? []).map((entry) => entry.question)
+		expect(questions).toContain('First change?')
+		expect(questions).toContain('Second change?')
+	} finally {
+		scheduler.disarmScheduler(room.id)
+		// Leave no live room behind: later tests call restoreSchedulers(),
+		// which arms every live room and would close this room's polls into
+		// their spies.
+		await prisma.room.update({
+			where: { id: room.id },
+			data: { status: 'ended' },
+		})
+	}
+})
+
+test('liveTick closes an overdue open poll whose close timer was lost', async () => {
+	// A closePoll that throws before the status update consumes the close
+	// timer and leaves the poll open forever — the old liveTick self-heal only
+	// rebuilt when NO poll was open, so the chain stalled.
+	const clock = createConcurrentClock()
+	scheduler.setSchedulerClock(clock)
+	const host = await makeHost()
+	const room = await makeRoom(host.id, { pollIntervalSec: 10 })
+	const poll = await makePoll(room.id, 1)
+
+	// Sabotage the first poll.update after arming: the close attempt dies
+	// before the status write (a mid-close crash / SQLITE_BUSY), consuming the
+	// close timer and leaving the poll overdue but open.
+	const originalUpdate = prisma.poll.update.bind(prisma.poll)
+	let sabotageNextUpdate = false
+	const patchedUpdate = async (...args: Parameters<typeof originalUpdate>) => {
+		if (sabotageNextUpdate) {
+			sabotageNextUpdate = false
+			throw new Error('sqlite busy')
+		}
+		return originalUpdate(...args)
+	}
+	// The Prisma delegate's overloads do not survive a test monkey-patch, so
+	// the slot is typed as the loosest callable.
+	const pollUpdateSlot = prisma.poll as unknown as {
+		update: (...args: Parameters<typeof originalUpdate>) => Promise<unknown>
+	}
+
+	try {
+		pollUpdateSlot.update = patchedUpdate
+		scheduler.armScheduler(room.id)
+		await clock.settle() // poll opens, closes at +5s
+		await vote(poll.id, 'yes', 'v1')
+
+		sabotageNextUpdate = true
+		clock.advance(5_000)
+		await clock.settle() // close attempt throws; poll stays open past closesAt
+
+		const overdue = await prisma.poll.findUnique({ where: { id: poll.id } })
+		expect(overdue?.status).toBe('open')
+
+		clock.advance(5_000)
+		await clock.settle() // tick at +10s must close the overdue poll and continue
+
+		const closed = await prisma.poll.findUnique({ where: { id: poll.id } })
+		expect(closed?.status).toBe('closed')
+		// The vote that landed before the crashed close still decides.
+		expect(closed?.winningOption).toBe('yes')
+
+		const next = await prisma.poll.findFirst({
+			where: { roomId: room.id, status: 'open' },
+		})
+		expect(next?.seq).toBe(2)
+	} finally {
+		sabotageNextUpdate = false
+		pollUpdateSlot.update = originalUpdate
+		scheduler.disarmScheduler(room.id)
+		// Leave no live room behind: later tests call restoreSchedulers(),
+		// which arms every live room and would close this room's polls into
+		// their spies.
+		await prisma.room.update({
+			where: { id: room.id },
+			data: { status: 'ended' },
+		})
+	}
+})
+
+test('stalled chain self-heals: a tick re-queues and opens a poll when nothing is pending', async () => {
+	const host = await makeHost()
+	const room = await makeRoom(host.id, { lengthSec: 300, pollIntervalSec: 10 })
+	// Crash aftermath: a closed poll, nothing queued, fresh timers.
+	await makePoll(room.id, 1, { status: 'closed' })
+
+	scheduler.armScheduler(room.id)
+	await fakeClock.tick(0)
+
+	// At the first tick the queue rebuild kicks in (nothing open, nothing queued).
+	await fakeClock.tick(10000)
+
+	const open = await prisma.poll.findFirst({
+		where: { roomId: room.id, status: 'open' },
+	})
+	expect(open?.kind).toBe('evolution')
+	expect(open?.question).toBe('More energy?')
+	expect(open?.seq).toBe(2)
+
+	scheduler.disarmScheduler(room.id)
+})
+
+test('evolution crash publishes a warning and the next tick rebuilds the poll', async () => {
+	const host = await makeHost()
+	const room = await makeRoom(host.id, { pollIntervalSec: 10 })
+	const poll = await prisma.poll.create({
+		data: {
+			roomId: room.id,
+			seq: 1,
+			kind: 'evolution',
+			question: 'Sharper drums or warmer chords?',
+			options: [
+				{ key: 'sharper-drums', label: 'sharper drums' },
+				{ key: 'warmer-chords', label: 'warmer chords' },
+			],
+			status: 'queued',
+		},
+	})
+	mockGenerateEvolution.mockImplementationOnce(async () => {
+		throw new Error('LLM exploded')
+	})
+
+	scheduler.armScheduler(room.id)
+	await fakeClock.tick(0)
+	await vote(poll.id, 'sharper-drums', 'v1')
+	await fakeClock.tick(5000)
+
+	const closed = await prisma.poll.findUnique({ where: { id: poll.id } })
+	expect(closed?.status).toBe('closed')
+	expect(closed?.winningOption).toBe('sharper-drums')
+
+	const warning = hostEvents().find((e) => e[1].type === 'warning')
+	expect(warning?.[0]).toBe(room.id)
+	expect(warning?.[1]).toMatchObject({ type: 'warning' })
+
+	// The room does not silently stall: the next tick rebuilds the chain and
+	// opens the following evolution poll.
+	await fakeClock.tick(10000)
+	const next = await prisma.poll.findFirst({
+		where: { roomId: room.id, status: 'open' },
+	})
+	expect(next?.seq).toBeGreaterThan(closed?.seq ?? 0)
 
 	scheduler.disarmScheduler(room.id)
 })
