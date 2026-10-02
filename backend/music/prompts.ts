@@ -1,5 +1,46 @@
 import type { MusicParams, StateDoc } from '@backend/music/state-doc'
 
+// Sound names the loaded dirt-samples bank actually resolves. The model is
+// told to stay inside this set (compileCheck rejects unknown names, which
+// costs a retry): `oh` (the classic Tidal open hat) is NOT in this bank —
+// the open-hat names here are `ho` and `808oh`.
+export const SOUND_HINTS = [
+	'bd',
+	'sd',
+	'cp',
+	'hh',
+	'hh27',
+	'ho',
+	'808oh',
+	'rm',
+	'rs',
+	'cr',
+	'ht',
+	'amencutup',
+	'clak',
+	'click',
+	'gretsch',
+	'808',
+	'casio',
+	'jazz',
+	'jungle',
+	'bass0',
+	'bass1',
+	'bassdm',
+	'jvbass',
+	'sitar',
+	'pluck',
+	'pad',
+	'stab',
+	'sawtooth',
+	'square',
+	'sine',
+	'triangle',
+	'saw',
+	'sqr',
+	'supersaw',
+]
+
 // Short, real Strudel snippets shown to the model as style anchors.
 export const FEW_SHOTS = [
 	's("bd sd cp hh")',
@@ -22,6 +63,14 @@ function fewShotsBlock(): string {
 	return [
 		'FEW-SHOT STRUDEL EXAMPLES:',
 		...FEW_SHOTS.map((snippet) => `- ${snippet}`),
+	].join('\n')
+}
+
+function soundsBlock(): string {
+	return [
+		'AVAILABLE SOUNDS (use ONLY these names in s(...) — any other sound is not loaded and will throw):',
+		SOUND_HINTS.join(' '),
+		'(no `oh` sample exists; use `ho` for open hats)',
 	].join('\n')
 }
 
@@ -64,6 +113,8 @@ export function buildInitialPatternPrompt(params: MusicParams): string {
 		'',
 		fewShotsBlock(),
 		'',
+		soundsBlock(),
+		'',
 		CODE_ONLY_RULE,
 	].join('\n')
 }
@@ -105,6 +156,8 @@ export function buildEvolutionPrompt(
 		'',
 		fewShotsBlock(),
 		'',
+		soundsBlock(),
+		'',
 		'Change exactly ONE dimension of the pattern. The winning vote only decides whether that one change happens, never how many things change. Keep every other element exactly as it is, keep the same tempo, and keep the pattern loopable.',
 		CODE_ONLY_RULE,
 	].join('\n')
@@ -119,6 +172,8 @@ export function buildOutroPrompt(doc: StateDoc, currentCode: string): string {
 		`Elements present: ${elementsBlock(doc)}`,
 		'',
 		fewShotsBlock(),
+		'',
+		soundsBlock(),
 		'',
 		'Resolve the set: sweep or fade the filter, drop elements one at a time, and land on a sustained final hit or chord. Finish within about 8 cycles and keep the tempo.',
 		CODE_ONLY_RULE,

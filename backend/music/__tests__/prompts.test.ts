@@ -5,6 +5,7 @@ import {
 	buildOutroPrompt,
 	buildQuestionPrompt,
 	FEW_SHOTS,
+	SOUND_HINTS,
 } from '@backend/music/prompts'
 import {
 	applyChange,
@@ -47,6 +48,24 @@ test('every prompt carries genre, bpm and few-shot snippets', () => {
 		expect(prompt).toContain(FEW_SHOTS[0] ?? '')
 		expect(prompt).toContain(FEW_SHOTS[1] ?? '')
 	}
+})
+
+test('code prompts constrain the model to available sound names', () => {
+	const prompts = [
+		buildInitialPatternPrompt(params),
+		buildEvolutionPrompt(votedDoc(), question, 'yes', currentCode),
+		buildOutroPrompt(votedDoc(), currentCode),
+	]
+	for (const prompt of prompts) {
+		expect(prompt).toContain('AVAILABLE SOUNDS')
+		expect(prompt).toContain('use ONLY these names')
+		expect(prompt).toContain('ho')
+		expect(prompt).toContain('no `oh` sample exists')
+	}
+})
+
+test('SOUND_HINTS all validate against the allowlist', () => {
+	expect(compileCheck(`s("${SOUND_HINTS.join(' ')}")`).ok).toBe(true)
 })
 
 test('code prompts forbid prose and markdown fences', () => {
