@@ -70,7 +70,7 @@ beforeAll(async () => {
 beforeEach(() => {
 	mockProvider = new MockLlmProvider([
 		's("bd sd cp hh")',
-		'Add bass?',
+		'Sharper drums or warmer chords?\n- sharper drums\n- warmer chords',
 		's("bd sd cp hh")',
 	])
 	mockScheduler.mockClear()
@@ -160,6 +160,11 @@ test('startRoom makes room live, applies initial version, sets currentCode, arms
 	expect(polls).toHaveLength(1)
 	expect(polls[0].status).toBe('queued')
 	expect(polls[0].seq).toBe(1)
+	expect(polls[0].question).toBe('Sharper drums or warmer chords?')
+	expect(polls[0].options).toEqual([
+		{ key: 'sharper-drums', label: 'sharper drums' },
+		{ key: 'warmer-chords', label: 'warmer chords' },
+	])
 
 	expect(mockScheduler.mock.calls.length).toBe(1)
 	expect(mockScheduler.mock.calls[0][0]).toBe(room.id)
@@ -411,7 +416,10 @@ test('router get returns FORBIDDEN for non-owner', async () => {
 
 const outroEngineThatFails = {
 	generateInitialPattern,
-	generateNextQuestion: async () => 'More energy?',
+	generateNextQuestion: async () => ({
+		question: 'More energy?',
+		options: ['more energy', 'deeper, darker groove'],
+	}),
 	generateOutro: async () => {
 		throw new MusicGenError('Failed to generate a valid outro after 2 attempts')
 	},

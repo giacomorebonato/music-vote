@@ -1,6 +1,8 @@
 import { expect, test } from 'bun:test'
 import { type LlmProvider, MockLlmProvider } from '@backend/llm/provider'
 import {
+	FALLBACK_OPTIONS,
+	FALLBACK_QUESTION,
 	generateEvolution,
 	generateInitialPattern,
 	generateNextQuestion,
@@ -22,8 +24,11 @@ const params = { genre: 'techno', bpm: 132 }
 const validCode = 's("bd sd cp hh")'
 const invalidCode = 's("bd sd'
 const fetchCode = "fetch('/evil')"
-const fallbackQuestion = 'Do you want more energy? yes/no'
 const longQuestion = 'x'.repeat(121)
+const fallbackQuestion = {
+	question: FALLBACK_QUESTION,
+	options: FALLBACK_OPTIONS,
+}
 
 function callsMade(provider: MockLlmProvider, initial: string[]): number {
 	return (
@@ -204,32 +209,67 @@ test('generateOutro: provider throw follows retry-then-throw path', async () => 
 
 // --- generateNextQuestion ---
 
-test('generateNextQuestion: happy path returns trimmed question', async () => {
-	const provider = new MockLlmProvider(['  Add more bass?  '])
+test('generateNextQuestion: parses the question and its change options', async () => {
+	const response =
+		'  Sharper drums or warmer chords?  \n- sharper drums\n- warmer chords  '
+	const provider = new MockLlmProvider([response])
 	const doc = initialStateDoc(params)
-	const question = await generateNextQuestion(provider, doc)
+	const result = await generateNextQuestion(provider, doc)
 
-	expect(question).toBe('Add more bass?')
-	expect(callsMade(provider, ['  Add more bass?  '])).toBe(1)
+	expect(result.question).toBe('Sharper drums or warmer chords?')
+	expect(result.options).toEqual(['sharper drums', 'warmer chords'])
+	expect(callsMade(provider, [response])).toBe(1)
 })
 
-test('generateNextQuestion: empty-then-valid retries once and returns valid question', async () => {
-	const responses = ['   ', 'Add more bass?']
+test('generateNextQuestion: strips numbered and bulleted option prefixes', async () => {
+	const provider = new MockLlmProvider([
+		'What next?\n1. bigger kick\n* brighter hats\n',
+	])
+	const result = await generateNextQuestion(provider, initialStateDoc(params))
+
+	expect(result.options).toEqual(['bigger kick', 'brighter hats'])
+})
+
+test('generateNextQuestion: question without options keeps the question and adds canned change options', async () => {
+	const responses = ['Add more bass?']
+	const provider = new MockLlmProvider(responses)
+	const result = await generateNextQuestion(provider, initialStateDoc(params))
+
+	expect(result.question).toBe('Add more bass?')
+	expect(result.options).toEqual(FALLBACK_OPTIONS)
+	expect(callsMade(provider, responses)).toBe(1)
+})
+
+test('generateNextQuestion: drops no-change options and falls back when under two remain', async () => {
+	const provider = new MockLlmProvider([
+		'More energy?\n- yes\n- keep it as is\n',
+	])
+	const result = await generateNextQuestion(provider, initialStateDoc(params))
+
+	expect(result.options).toEqual(FALLBACK_OPTIONS)
+})
+
+test('generateNextQuestion: empty-then-valid retries once and returns the valid question', async () => {
+	const responses = ['   ', 'Add more bass?\n- more bass\n- tighter drums']
 	const provider = new MockLlmProvider(responses)
 	const doc = initialStateDoc(params)
-	const question = await generateNextQuestion(provider, doc)
+	const result = await generateNextQuestion(provider, doc)
 
-	expect(question).toBe('Add more bass?')
+	expect(result.question).toBe('Add more bass?')
+	expect(result.options).toEqual(['more bass', 'tighter drums'])
 	expect(callsMade(provider, responses)).toBe(2)
 })
 
 test('generateNextQuestion: oversized-then-valid retries once and returns valid question', async () => {
-	const responses = [longQuestion, 'Add more bass?']
+	const responses = [
+		longQuestion,
+		'Add more bass?\n- more bass\n- tighter drums',
+	]
 	const provider = new MockLlmProvider(responses)
 	const doc = initialStateDoc(params)
-	const question = await generateNextQuestion(provider, doc)
+	const result = await generateNextQuestion(provider, doc)
 
-	expect(question).toBe('Add more bass?')
+	expect(result.question).toBe('Add more bass?')
 	expect(callsMade(provider, responses)).toBe(2)
 })
 
@@ -237,17 +277,17 @@ test('generateNextQuestion: twice-invalid falls back to canned question after 2 
 	const responses = [longQuestion, '   ']
 	const provider = new MockLlmProvider(responses)
 	const doc = initialStateDoc(params)
-	const question = await generateNextQuestion(provider, doc)
+	const result = await generateNextQuestion(provider, doc)
 
-	expect(question).toBe(fallbackQuestion)
+	expect(result).toEqual(fallbackQuestion)
 	expect(callsMade(provider, responses)).toBe(2)
 })
 
 test('generateNextQuestion: provider throw falls back to canned question after 2 attempts', async () => {
 	const provider = new ThrowingProvider()
 	const doc = initialStateDoc(params)
-	const question = await generateNextQuestion(provider, doc)
+	const result = await generateNextQuestion(provider, doc)
 
-	expect(question).toBe(fallbackQuestion)
+	expect(result).toEqual(fallbackQuestion)
 	expect(provider.calls).toBe(2)
 })

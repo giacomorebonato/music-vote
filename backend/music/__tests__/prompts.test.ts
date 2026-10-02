@@ -88,7 +88,7 @@ test('initial pattern prompt asks for a loopable pattern at the room bpm', () =>
 	expect(prompt).toContain('techno')
 })
 
-test('evolution prompt carries current code, poll result, history and one-dimension rule', () => {
+test('evolution prompt carries current code, poll result, history and one-change rule', () => {
 	const prompt = buildEvolutionPrompt(votedDoc(), question, 'yes', currentCode)
 
 	expect(prompt).toContain(currentCode)
@@ -96,7 +96,7 @@ test('evolution prompt carries current code, poll result, history and one-dimens
 	expect(prompt).toContain('yes')
 	expect(prompt).toContain('techno')
 	expect(prompt).toContain('132')
-	expect(prompt).toMatch(/exactly ONE dimension/)
+	expect(prompt).toMatch(/exactly ONE change/)
 	expect(prompt).toContain('added a punchier kick')
 })
 
@@ -118,12 +118,15 @@ test('outro prompt carries current code and the code-only rule', () => {
 	expect(prompt).toContain('techno')
 })
 
-test('question prompt: one yes/no question, max 120 chars, no repeats, paced', () => {
+test('question prompt: a question plus at least two change options, no repeats, paced', () => {
 	const doc = votedDoc()
 	const prompt = buildQuestionPrompt(doc)
 
-	expect(prompt).toContain('ONE yes/no question')
+	expect(prompt).toContain('at least two answer options')
+	expect(prompt).toContain('first line')
+	expect(prompt).toContain('keep it as is')
 	expect(prompt).toContain('120')
+	expect(prompt).toContain('60')
 	expect(prompt).toContain(doc.polledDimensions.join(', '))
 	expect(prompt).toContain('pace the evolution')
 	expect(prompt).toContain('techno')

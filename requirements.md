@@ -15,9 +15,11 @@ A few parameter are decided like:
 A QR code is provided so the people listening to the music can provide feedback while the dance to the music.
 There is going to be a poll every 2 minutes (let's make this interval variable) where users are going to be asked with AI generated questions like:
 
-> do you want richer rhythm? yes/no
-> should this sound more 80s? yes/no
-> is it time to add a melodic synth lead? yes/no
+> sharper drums or warmer chords?
+> a wider stereo pad or a dirtier bass?
+> open the filter or freeze the groove?
+
+Every option is a different change to the music — a poll never offers a "keep it as it is" or yes/no answer, so whichever option wins the song changes. The end poll (wrap up vs keep going) is the one lifecycle exception.
 
 And this is what makes this concept cool: democratically the song changes depending on what people listening to it want.
 

@@ -22,10 +22,72 @@ export class MusicGenError extends Error {
 
 const MAX_CODE_ATTEMPTS = 2
 const MAX_QUESTION_ATTEMPTS = 2
-const FALLBACK_QUESTION = 'Do you want more energy? yes/no'
+const MAX_QUESTION_CHARS = 120
+const MAX_OPTION_CHARS = 60
+const MAX_OPTIONS = 4
+export const FALLBACK_QUESTION = 'Where should the set go next?'
+export const FALLBACK_OPTIONS = ['more energy', 'deeper, darker groove']
 const INITIAL_QUESTION = 'start set'
 const INITIAL_WINNER = 'yes'
 const INITIAL_SUMMARY = 'initial pattern'
+
+/** Question plus the change options the audience votes between. */
+export type GeneratedQuestion = {
+	question: string
+	options: string[]
+}
+
+// An option that means "do not change the music" makes the poll a no-op, so the
+// model's options are filtered against this set; too few survivors fall back.
+const NO_CHANGE_OPTION =
+	/^(?:no|nope|yes|yep|yeah|no change|no changes|nothing|same|as is|keep(?: it)? as is|keep going|keep it|leave(?: it)? as is|status quo)[.!]?$/i
+
+function stripListPrefix(line: string): string {
+	return line.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim()
+}
+
+function stripQuestionPrefix(line: string): string {
+	return line.replace(/^\s*(?:q|question)\s*[:.-]\s*/i, '').trim()
+}
+
+function changeOptions(lines: string[]): string[] {
+	const seen = new Set<string>()
+	const options: string[] = []
+	for (const line of lines) {
+		const label = stripListPrefix(line)
+		if (label.length === 0 || label.length > MAX_OPTION_CHARS) continue
+		if (NO_CHANGE_OPTION.test(label)) continue
+		const dedupeKey = label.toLowerCase()
+		if (seen.has(dedupeKey)) continue
+		seen.add(dedupeKey)
+		options.push(label)
+		if (options.length === MAX_OPTIONS) break
+	}
+	return options
+}
+
+/**
+ * Parse a model answer into a question and its change options. Line-based so a
+ * small local model never has to emit valid JSON: the first non-empty line is
+ * the question, every following line is an option (bullets optional). A valid
+ * question with fewer than two usable change options keeps the question and
+ * pairs it with the canned changes, so a poll always offers a real choice.
+ */
+export function parseQuestionResponse(raw: string): GeneratedQuestion | null {
+	const lines = raw
+		.split('\n')
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0)
+	const [first, ...rest] = lines
+	if (first === undefined) return null
+
+	const question = stripQuestionPrefix(first)
+	if (question.length === 0 || question.length > MAX_QUESTION_CHARS) return null
+
+	const options = changeOptions(rest)
+	if (options.length >= 2) return { question, options }
+	return { question, options: [...FALLBACK_OPTIONS] }
+}
 
 async function tryGenerateCode(
 	provider: LlmProvider,
@@ -107,7 +169,7 @@ export async function generateOutro(
 export async function generateNextQuestion(
 	provider: LlmProvider,
 	doc: StateDoc,
-): Promise<string> {
+): Promise<GeneratedQuestion> {
 	const prompt = buildQuestionPrompt(doc)
 
 	for (let attempt = 0; attempt < MAX_QUESTION_ATTEMPTS; attempt++) {
@@ -118,11 +180,9 @@ export async function generateNextQuestion(
 			continue
 		}
 
-		const trimmed = raw.trim()
-		if (trimmed.length > 0 && trimmed.length <= 120) {
-			return trimmed
-		}
+		const parsed = parseQuestionResponse(raw)
+		if (parsed) return parsed
 	}
 
-	return FALLBACK_QUESTION
+	return { question: FALLBACK_QUESTION, options: [...FALLBACK_OPTIONS] }
 }

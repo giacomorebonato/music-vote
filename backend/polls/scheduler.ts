@@ -4,6 +4,7 @@ import { generateEvolution, generateNextQuestion } from '@backend/music/engine'
 import { applyChange, type StateDoc } from '@backend/music/state-doc'
 import { compileCheck } from '@backend/music/validate'
 import { hub } from '@backend/realtime/hub'
+import { toPollOptions } from '@backend/votes/service'
 import type { WsEvent } from '@shared/realtime/events'
 import type { Prisma, Room } from '../../prisma/generated/client'
 
@@ -391,6 +392,8 @@ async function closePoll(pollId: string, roomId: string): Promise<void> {
 	hub.publishHost(roomId, closed)
 
 	if (winner) {
+		const winnerLabel =
+			options.find((option) => option.key === winner)?.label ?? winner
 		if (poll.kind === 'end') {
 			if (winner === 'wrap') {
 				await triggerEndRoom(roomId, room.hostId)
@@ -401,7 +404,8 @@ async function closePoll(pollId: string, roomId: string): Promise<void> {
 				await openNextQueuedPoll(roomId)
 			}
 		} else if (poll.kind === 'evolution') {
-			await runEvolution(room, poll, winner)
+			// The prompt needs the human-readable change, not the storage key.
+			await runEvolution(room, poll, winnerLabel)
 		}
 	}
 
@@ -503,7 +507,7 @@ async function queueNextEvolution(
 	})
 	const seq = (last?.seq ?? 0) + 1
 	const provider = getLlmProvider()
-	const question = await generateNextQuestion(
+	const generated = await generateNextQuestion(
 		provider,
 		room.stateDoc as unknown as StateDoc,
 	)
@@ -512,11 +516,8 @@ async function queueNextEvolution(
 			roomId,
 			seq,
 			kind: 'evolution',
-			question,
-			options: [
-				{ key: 'yes', label: 'Yes' },
-				{ key: 'no', label: 'No' },
-			],
+			question: generated.question,
+			options: toPollOptions(generated.options),
 			status: 'queued',
 		},
 	})

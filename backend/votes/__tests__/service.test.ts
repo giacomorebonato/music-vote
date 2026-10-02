@@ -156,6 +156,30 @@ test('claimSession over the fetch adapter emits Set-Cookie on the response', asy
 	expect(res.headers.getSetCookie().join(';')).toContain('mv_session=')
 })
 
+test('toPollOptions slugs labels into stable unique keys', () => {
+	const options = service.toPollOptions(['Sharper drums', 'Warmer chords'])
+
+	expect(options).toEqual([
+		{ key: 'sharper-drums', label: 'Sharper drums' },
+		{ key: 'warmer-chords', label: 'Warmer chords' },
+	])
+})
+
+test('toPollOptions deduplicates colliding keys', () => {
+	const options = service.toPollOptions(['More energy!', 'More energy?'])
+
+	expect(options.map((option) => option.key)).toEqual([
+		'more-energy',
+		'more-energy-2',
+	])
+})
+
+test('toPollOptions keeps a usable key for labels without letters', () => {
+	const options = service.toPollOptions(['!!!', '???'])
+
+	expect(options.map((option) => option.key)).toEqual(['option', 'option-2'])
+})
+
 test('castVote rejects a poll that is not open', async () => {
 	const room = await makeRoom()
 	const poll = await makePoll(room.id, { status: 'closed' })

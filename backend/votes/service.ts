@@ -8,6 +8,36 @@ export type PollOption = {
 	label: string
 }
 
+function slugify(label: string): string {
+	const slug = label
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-+|-+$/g, '')
+		.slice(0, 40)
+		.replace(/-+$/g, '')
+	return slug.length > 0 ? slug : 'option'
+}
+
+/**
+ * Turn generated option labels into vote keys. The label is what the audience
+ * reads; the key is the stable identifier stored on votes and `winningOption`.
+ * Colliding slugs get a numeric suffix so every option stays votable.
+ */
+export function toPollOptions(labels: string[]): PollOption[] {
+	const used = new Set<string>()
+	return labels.map((label) => {
+		const base = slugify(label)
+		let key = base
+		let suffix = 2
+		while (used.has(key)) {
+			key = `${base}-${suffix}`
+			suffix += 1
+		}
+		used.add(key)
+		return { key, label }
+	})
+}
+
 /**
  * Poll.options is untyped Json, so app-layer parsing/validation is the only
  * guard. Mirror the scheduler's shape.

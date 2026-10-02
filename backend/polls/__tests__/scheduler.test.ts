@@ -244,12 +244,18 @@ beforeEach(() => {
 
 	hubSpies.publishHost.mockClear()
 	hubSpies.publishAudience.mockClear()
+	mockGenerateEvolution.mockClear()
+	mockGenerateNextQuestion.mockClear()
+	mockGenerateOutro.mockClear()
 
 	mockGenerateEvolution.mockImplementation(async () => ({
 		code: 's("bd sd")',
 		changeSummary: 'more drums',
 	}))
-	mockGenerateNextQuestion.mockImplementation(async () => 'More energy?')
+	mockGenerateNextQuestion.mockImplementation(async () => ({
+		question: 'More energy?',
+		options: ['more energy', 'deeper, darker groove'],
+	}))
 	mockGenerateOutro.mockImplementation(async () => 's("bd sd")')
 })
 
@@ -321,6 +327,47 @@ test('full cycle: open poll, tally votes, create candidate version', async () =>
 	})
 	expect(nextPolls).toHaveLength(1)
 	expect(nextPolls[0].seq).toBe(2)
+
+	scheduler.disarmScheduler(room.id)
+})
+
+test('evolution close feeds the winning option label to the LLM and queues change options', async () => {
+	const host = await makeHost()
+	const room = await makeRoom(host.id)
+	const poll = await prisma.poll.create({
+		data: {
+			roomId: room.id,
+			seq: 1,
+			kind: 'evolution',
+			question: 'Sharper drums or warmer chords?',
+			options: [
+				{ key: 'sharper-drums', label: 'sharper drums' },
+				{ key: 'warmer-chords', label: 'warmer chords' },
+			],
+			status: 'queued',
+		},
+	})
+
+	scheduler.armScheduler(room.id)
+	await fakeClock.tick(0)
+	await vote(poll.id, 'warmer-chords', 'v1')
+	await fakeClock.tick(5000)
+
+	const closed = await prisma.poll.findUnique({ where: { id: poll.id } })
+	expect(closed?.winningOption).toBe('warmer-chords')
+
+	// The evolution prompt receives the human-readable change, not the storage key.
+	const evolutionCall = mockGenerateEvolution.mock.calls[0] as unknown[]
+	expect(evolutionCall[3]).toBe('warmer chords')
+
+	// The next queued poll carries the LLM's change options, never yes/no.
+	const next = await prisma.poll.findFirst({
+		where: { roomId: room.id, seq: 2 },
+	})
+	expect(next?.options).toEqual([
+		{ key: 'more-energy', label: 'more energy' },
+		{ key: 'deeper-darker-groove', label: 'deeper, darker groove' },
+	])
 
 	scheduler.disarmScheduler(room.id)
 })

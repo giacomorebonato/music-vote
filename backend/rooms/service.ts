@@ -8,6 +8,7 @@ import {
 import type { StateDoc } from '@backend/music/state-doc'
 import { armScheduler, disarmScheduler } from '@backend/polls/scheduler'
 import { hub } from '@backend/realtime/hub'
+import { toPollOptions } from '@backend/votes/service'
 import type { createRoomSchema } from '@shared/schemas/room'
 import type { z } from 'zod'
 import type { Prisma, Room } from '../../prisma/generated/client'
@@ -62,7 +63,7 @@ export async function startRoom(
 		genre: room.genre,
 		bpm: room.bpm,
 	})
-	const question = await engine.generateNextQuestion(provider, doc)
+	const generated = await engine.generateNextQuestion(provider, doc)
 	const now = new Date()
 	const version = await prisma.patternVersion.create({
 		data: {
@@ -92,11 +93,8 @@ export async function startRoom(
 			roomId,
 			seq: 1,
 			kind: 'evolution',
-			question,
-			options: [
-				{ key: 'yes', label: 'Yes' },
-				{ key: 'no', label: 'No' },
-			],
+			question: generated.question,
+			options: toPollOptions(generated.options),
 			status: 'queued',
 		},
 	})

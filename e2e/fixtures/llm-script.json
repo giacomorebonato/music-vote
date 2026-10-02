@@ -1,6 +1,6 @@
 {
 	"responses": [
 		"s(\"bd sd cp hh\").gain(0.8)\nnote(\"c2 eb2 g2\").s(\"sawtooth\").lpf(700)",
-		"More energy?"
+		"Sharper drums or warmer chords?\n- sharper drums\n- warmer chords"
 	]
 }

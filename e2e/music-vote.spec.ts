@@ -28,8 +28,9 @@ const llmScript = JSON.parse(
 // call site that makes two chats with one provider instance (initial pattern,
 // then the first question), so: responses[0] is the pattern every code prompt
 // gets (initial, each evolution, outro) and responses[1] is poll 1's question.
-// Every later question re-reads responses[0].
-const FIRST_QUESTION = llmScript.responses[1] ?? ''
+// Every later question re-reads responses[0], so only the first line of the
+// scripted question block is ever shown as the poll question.
+const FIRST_QUESTION = llmScript.responses[1]?.split('\n')[0]?.trim() ?? ''
 
 const POLL_OPEN_WINDOW_MS = 5_000
 const OUTRO_WINDOW_MS = 60_000
@@ -295,8 +296,13 @@ test('host runs a set that the audience votes through, undoes, and ends', async 
 	const otherItems = itemTexts.filter((text) => !text.includes(FIRST_QUESTION))
 	expect(firstQuestionItems).toHaveLength(1)
 	expect(otherItems).toHaveLength(1)
+	// Each decided poll shows that poll's OWN winning option key; the fallback
+	// second question offers different change options, so the keys never collide.
+	expect(itemTexts.filter((text) => text.includes(optionKey))).toHaveLength(1)
+	expect(
+		itemTexts.filter((text) => text.includes(secondPollOption.key)),
+	).toHaveLength(1)
 	for (const text of itemTexts) {
-		expect(text).toContain(optionKey)
 		expect(text).toContain('music changed')
 	}
 

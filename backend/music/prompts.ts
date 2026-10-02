@@ -129,8 +129,11 @@ export function buildQuestionPrompt(doc: StateDoc): string {
 		'',
 		fewShotsBlock(),
 		'',
-		'Ask the audience about the next change.',
-		'Output ONE yes/no question, nothing else. Max 120 characters.',
+		'Ask the audience to choose the next change to the music.',
+		'Output the question on the first line (max 120 characters), then at least two answer options, one per line, each starting with "- ".',
+		'Every option must describe a DIFFERENT change to the pattern (energy, drums, bass, melody, harmony, sound design).',
+		'Never offer an option that keeps the music as it is: no "yes", "no", "keep it as is", "no change", "same" or "nothing" answers.',
+		'Max 60 characters per option, no prose, no markdown fences.',
 		'Never repeat a dimension already polled, never ask about code or technical terms, and pace the evolution: do not stack another melody or a third layer right after one was added.',
 	].join('\n')
 }
@@ -158,7 +161,7 @@ export function buildEvolutionPrompt(
 		'',
 		soundsBlock(),
 		'',
-		'Change exactly ONE dimension of the pattern. The winning vote only decides whether that one change happens, never how many things change. Keep every other element exactly as it is, keep the same tempo, and keep the pattern loopable.',
+		'Implement exactly ONE change: the winning vote describes that change. Keep every other element exactly as it is, keep the same tempo, and keep the pattern loopable.',
 		CODE_ONLY_RULE,
 	].join('\n')
 }

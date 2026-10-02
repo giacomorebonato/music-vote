@@ -65,7 +65,8 @@ export const roomsRouter = t.router({
 			}
 			// Zero-fill from the open poll's option keys so the shape matches the
 			// `vote_count` WS event and the client can render any poll (evolution
-			// polls are yes/no, the end poll is wrap/continue).
+			// polls carry their own generated option keys, the end poll is
+			// wrap/continue).
 			const voteCounts: Record<string, number> = {}
 			for (const option of parseOptions(openPoll?.options)) {
 				voteCounts[option.key] = 0
