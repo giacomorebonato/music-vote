@@ -26,6 +26,7 @@ export function CreateRoute() {
 			bpm: 120,
 			lengthMin: 10,
 			pollIntervalSec: 60,
+			pollOpenSec: 45,
 		},
 		validators: { onChange: createRoomSchema },
 		onSubmit: ({ value }) => {
@@ -129,14 +130,14 @@ export function CreateRoute() {
 						{(field) => (
 							<label className="form-control flex flex-col gap-1">
 								<span className="label-text">
-									Poll interval in seconds (60–600)
+									Poll interval in seconds (5–600)
 								</span>
 								<input
 									className="input input-bordered w-full"
 									type="number"
-									min={60}
+									min={5}
 									max={600}
-									step={30}
+									step={5}
 									value={field.state.value}
 									onBlur={field.handleBlur}
 									onChange={(event) =>
@@ -146,6 +147,46 @@ export function CreateRoute() {
 							</label>
 						)}
 					</form.Field>
+
+					<form.Field name="pollOpenSec">
+						{(field) => (
+							<label className="form-control flex flex-col gap-1">
+								<span className="label-text">
+									Poll open window in seconds (15–600)
+								</span>
+								<input
+									className="input input-bordered w-full"
+									type="number"
+									min={15}
+									max={600}
+									step={5}
+									value={field.state.value}
+									onBlur={field.handleBlur}
+									onChange={(event) =>
+										field.handleChange(event.target.valueAsNumber)
+									}
+								/>
+								<span className="text-xs opacity-60">
+									Countdown the audience sees after voting.
+								</span>
+							</label>
+						)}
+					</form.Field>
+
+					<form.Subscribe
+						selector={(state) => [
+							state.values.pollIntervalSec,
+							state.values.pollOpenSec,
+						]}
+					>
+						{([intervalSec, openSec]) =>
+							Number.isFinite(intervalSec) && Number.isFinite(openSec) ? (
+								<p className="text-xs opacity-60" data-testid="cycle-estimate">
+									≈ one vote cycle every {intervalSec + openSec}s
+								</p>
+							) : null
+						}
+					</form.Subscribe>
 
 					{createRoom.error ? (
 						<div className="alert alert-error" data-testid="create-error">

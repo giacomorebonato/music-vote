@@ -125,10 +125,16 @@ async function makeRoom(
 	overrides?: Partial<{
 		lengthSec: number
 		pollIntervalSec: number
+		pollOpenSec: number
 		status: string
 		currentCode: string
 	}>,
-): Promise<{ id: string; createdAt: Date; pollIntervalSec: number }> {
+): Promise<{
+	id: string
+	createdAt: Date
+	pollIntervalSec: number
+	pollOpenSec: number
+}> {
 	const room = await prisma.room.create({
 		data: {
 			hostId,
@@ -143,7 +149,12 @@ async function makeRoom(
 		},
 	})
 	fakeClock.setTime(room.createdAt.getTime())
-	return room as { id: string; createdAt: Date; pollIntervalSec: number }
+	return room as {
+		id: string
+		createdAt: Date
+		pollIntervalSec: number
+		pollOpenSec: number
+	}
 }
 
 async function makePoll(
@@ -898,4 +909,133 @@ test('restoreSchedulers overdue close replenishes the queue and the next poll op
 	})
 
 	scheduler.disarmScheduler(room.id)
+})
+
+test('MV_TEST_INTERVAL_SECS compresses room interval for quick dev testing', () => {
+	process.env.MV_TEST_INTERVAL_SECS = '10'
+	expect(scheduler.roomIntervalSec(60)).toBe(10)
+	expect(scheduler.roomIntervalSec(600)).toBe(10)
+	expect(scheduler.roomIntervalSec(10)).toBe(10)
+	expect(scheduler.roomIntervalSec(5)).toBe(5)
+
+	delete process.env.MV_TEST_INTERVAL_SECS
+	// Hook off: unchanged semantics (fast-mode 10s floor applies in this file,
+	// so a 5s room interval still floors to 10s here).
+	expect(scheduler.roomIntervalSec(5)).toBe(5)
+})
+
+test('MV_TEST_INTERVAL_SECS invalid values ignored', () => {
+	process.env.MV_TEST_INTERVAL_SECS = '0'
+	expect(scheduler.roomIntervalSec(60)).toBe(60)
+	process.env.MV_TEST_INTERVAL_SECS = 'bogus'
+	expect(scheduler.roomIntervalSec(60)).toBe(60)
+	process.env.MV_TEST_INTERVAL_SECS = '-5'
+	expect(scheduler.roomIntervalSec(60)).toBe(60)
+	delete process.env.MV_TEST_INTERVAL_SECS
+})
+
+test('MV_TEST_POLL_OPEN_SECS overrides the poll open window in dev', () => {
+	try {
+		process.env.MV_TEST_POLL_OPEN_SECS = '10'
+		delete process.env.MV_E2E_FAST
+		// Global dev override wins over the per-room value.
+		expect(scheduler.pollOpenMs(20)).toBe(10_000)
+		// Unset: the per-room value wins (default fallback 45s).
+		delete process.env.MV_TEST_POLL_OPEN_SECS
+		expect(scheduler.pollOpenMs(20)).toBe(20_000)
+		expect(scheduler.pollOpenMs()).toBe(45_000)
+		// Invalid values are ignored (per-room value still wins).
+		process.env.MV_TEST_POLL_OPEN_SECS = 'bogus'
+		expect(scheduler.pollOpenMs(15)).toBe(15_000)
+		process.env.MV_TEST_POLL_OPEN_SECS = '-5'
+		expect(scheduler.pollOpenMs(15)).toBe(15_000)
+		// Fast mode wins over both the room value and a dev override (E2E stability).
+		process.env.MV_TEST_POLL_OPEN_SECS = '3'
+		process.env.MV_E2E_FAST = '1'
+		expect(scheduler.pollOpenMs(20)).toBe(5_000)
+	} finally {
+		delete process.env.MV_TEST_POLL_OPEN_SECS
+		process.env.MV_E2E_FAST = '1'
+	}
+})
+
+test('dev compressor: room with 60s interval ticks at 10s while env set', async () => {
+	process.env.MV_TEST_INTERVAL_SECS = '10'
+	const host = await makeHost()
+	const room = await makeRoom(host.id, { pollIntervalSec: 60 })
+	const poll = await makePoll(room.id, 1)
+
+	try {
+		scheduler.armScheduler(room.id)
+		await fakeClock.tick(0)
+		await vote(poll.id, 'yes', 'v1')
+		await fakeClock.tick(5_000)
+
+		const closed = await prisma.poll.findUnique({ where: { id: poll.id } })
+		expect(closed?.status).toBe('closed')
+
+		// Without the compressor the next tick would land 60s (pollIntervalSec)
+		// after the close; with it the interval is 10s, so seq2 opens here.
+		await fakeClock.tick(10_000)
+		const seq2 = await prisma.poll.findFirst({
+			where: { roomId: room.id, seq: 2 },
+		})
+		expect(seq2?.status).toBe('open')
+	} finally {
+		delete process.env.MV_TEST_INTERVAL_SECS
+		scheduler.disarmScheduler(room.id)
+	}
+})
+
+test('dev compressor: poll closes after MV_TEST_POLL_OPEN_SECS (dev, fast off)', async () => {
+	process.env.MV_TEST_POLL_OPEN_SECS = '10'
+	delete process.env.MV_E2E_FAST
+	const host = await makeHost()
+	const room = await makeRoom(host.id, { pollIntervalSec: 60 })
+	const poll = await makePoll(room.id, 1)
+
+	try {
+		scheduler.armScheduler(room.id)
+		await fakeClock.tick(0)
+		let row = await prisma.poll.findUnique({ where: { id: poll.id } })
+		expect(row?.status).toBe('open')
+
+		// The 45s default would not close the poll at 5s; the override makes
+		// the close timer fire at exactly 10s.
+		await fakeClock.tick(5_000)
+		row = await prisma.poll.findUnique({ where: { id: poll.id } })
+		expect(row?.status).toBe('open')
+
+		await fakeClock.tick(5_000)
+		row = await prisma.poll.findUnique({ where: { id: poll.id } })
+		expect(row?.status).toBe('closed')
+	} finally {
+		delete process.env.MV_TEST_POLL_OPEN_SECS
+		process.env.MV_E2E_FAST = '1'
+		scheduler.disarmScheduler(room.id)
+	}
+})
+
+test('dev: poll closes after the room pollOpenSec (fast off, no global override)', async () => {
+	delete process.env.MV_E2E_FAST
+	const host = await makeHost()
+	const room = await makeRoom(host.id, { pollIntervalSec: 60, pollOpenSec: 20 })
+	const poll = await makePoll(room.id, 1)
+
+	try {
+		scheduler.armScheduler(room.id)
+		await fakeClock.tick(0)
+		let row = await prisma.poll.findUnique({ where: { id: poll.id } })
+		expect(row?.status).toBe('open')
+
+		// Neither the 45s default nor the 5s fast-mode window: the per-room
+		// value drives the close timer (closesAt = openedAt + 20s).
+		await fakeClock.tick(20_000)
+		row = await prisma.poll.findUnique({ where: { id: poll.id } })
+		expect(row?.status).toBe('closed')
+		expect(row?.closesAt?.getTime()).toBe(room.createdAt.getTime() + 20_000)
+	} finally {
+		process.env.MV_E2E_FAST = '1'
+		scheduler.disarmScheduler(room.id)
+	}
 })

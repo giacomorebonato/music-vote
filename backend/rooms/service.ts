@@ -36,6 +36,7 @@ export async function createRoom(
 			bpm: input.bpm,
 			lengthSec: input.lengthMin * 60,
 			pollIntervalSec: input.pollIntervalSec,
+			pollOpenSec: input.pollOpenSec,
 			genre: input.genre,
 			status: 'lobby',
 			stateDoc: {},

@@ -88,6 +88,7 @@ const baseInput = () => ({
 	bpm: 120,
 	lengthMin: 10,
 	pollIntervalSec: 120,
+	pollOpenSec: 45,
 	genre: 'techno',
 })
 
@@ -97,6 +98,17 @@ test('createRoom creates lobby with lengthSec = lengthMin * 60', async () => {
 
 	expect(room.status).toBe('lobby')
 	expect(room.lengthSec).toBe(600)
+	expect(room.pollOpenSec).toBe(45)
+})
+
+test('createRoom persists the per-room poll open window', async () => {
+	const host = await makeHost()
+	const room = await service.createRoom(host.id, {
+		...baseInput(),
+		pollOpenSec: 20,
+	})
+
+	expect(room.pollOpenSec).toBe(20)
 })
 
 test('startRoom is atomic: question-gen throw leaves room lobby with zero versions', async () => {

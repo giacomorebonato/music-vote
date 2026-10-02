@@ -73,7 +73,12 @@ test('vote dedup: second vote same token+poll throws P2002', async () => {
 })
 
 test('createRoomSchema rejects bpm 59 and 201', () => {
-	const base = { lengthMin: 10, pollIntervalSec: 120, genre: 'techno' }
+	const base = {
+		lengthMin: 10,
+		pollIntervalSec: 120,
+		pollOpenSec: 45,
+		genre: 'techno',
+	}
 	expect(createRoomSchema.safeParse({ ...base, bpm: 59 }).success).toBe(false)
 	expect(createRoomSchema.safeParse({ ...base, bpm: 201 }).success).toBe(false)
 	expect(createRoomSchema.safeParse({ ...base, bpm: 60 }).success).toBe(true)

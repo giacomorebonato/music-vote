@@ -29,6 +29,7 @@ model Room {
   bpm             Int
   lengthSec       Int
   pollIntervalSec Int
+  pollOpenSec     Int              @default(45)
   genre           String
   status          String
   currentCode     String?

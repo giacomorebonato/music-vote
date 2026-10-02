@@ -15,11 +15,58 @@ import type { Prisma, Room } from '../../prisma/generated/client'
  *
  * When MV_E2E_FAST=1 the poll open window shrinks to 5s and the interval clamps
  * to a minimum of 10s so end-to-end tests can run a real cycle quickly.
+ *
+ * Dev quick-testing: setting MV_TEST_INTERVAL_SECS=<s> compresses every room's
+ * interval DOWN to at most <s> seconds (regardless of the schema minimum),
+ * so poll results land ~ every <s> + open-window seconds. Setting
+ * MV_TEST_POLL_OPEN_SECS=<s> overrides the per-room poll open window (the
+ * create-room form default is 45s), for example `MV_TEST_POLL_OPEN_SECS=10 bun
+ * run dev` gives a 10s countdown after voting in every room. Dev-only: unset
+ * env leaves per-room timings untouched, and MV_E2E_FAST keeps precedence
+ * (its 5s window must stay stable for E2E).
  */
 
-const POLL_OPEN_SECS = process.env.MV_E2E_FAST === '1' ? 5 : 45
+const DEFAULT_POLL_OPEN_SECS = 45
 const MIN_INTERVAL_SECS = process.env.MV_E2E_FAST === '1' ? 10 : 0
-const POLL_OPEN_MS = POLL_OPEN_SECS * 1000
+
+function parseTestInterval(): number | null {
+	const raw = Number.parseInt(process.env.MV_TEST_INTERVAL_SECS ?? '', 10)
+	return Number.isInteger(raw) && raw > 0 ? raw : null
+}
+
+function parseTestPollOpenSecs(): number | null {
+	const raw = Number.parseInt(process.env.MV_TEST_POLL_OPEN_SECS ?? '', 10)
+	return Number.isInteger(raw) && raw > 0 ? raw : null
+}
+
+/**
+ * Poll open window in ms. Fast mode hard-codes the 5s window; otherwise the
+ * dev-only MV_TEST_POLL_OPEN_SECS override wins, defaulting to the per-room
+ * `pollOpenSec` (create-room field, 45s default).
+ */
+export function pollOpenMs(roomPollOpenSec = DEFAULT_POLL_OPEN_SECS): number {
+	if (process.env.MV_E2E_FAST === '1') return 5_000
+	const secs = parseTestPollOpenSecs() ?? roomPollOpenSec
+	return secs * 1000
+}
+
+/**
+ * Effective room interval in seconds. Compression (dev MV_TEST_INTERVAL_SECS)
+ * lowers the interval; it never RAISES it — the fast-mode 10s floor is applied
+ * by the tick-site callers that historically had it (raw pollIntervalSec on
+ * outro-finalize sites keeps its shorter semantics).
+ */
+export function roomIntervalSec(pollIntervalSec: number): number {
+	let secs = pollIntervalSec
+	const testInterval = parseTestInterval()
+	if (testInterval) secs = Math.min(secs, testInterval)
+	return secs
+}
+
+/** Room interval for live ticks: compression + fast-mode floor. */
+function tickIntervalMSec(pollIntervalSec: number): number {
+	return Math.max(roomIntervalSec(pollIntervalSec), MIN_INTERVAL_SECS) * 1000
+}
 
 export type SchedulerClock = {
 	now(): number
@@ -137,7 +184,7 @@ async function armLive(room: Room): Promise<void> {
 		}, insertAt - now)
 	}
 
-	const intervalMs = Math.max(room.pollIntervalSec, MIN_INTERVAL_SECS) * 1000
+	const intervalMs = tickIntervalMSec(room.pollIntervalSec)
 	scheduler.intervalHandle = clock.setTimeout(async () => {
 		await liveTick(room.id, intervalMs)
 	}, intervalMs)
@@ -200,7 +247,7 @@ async function armOutro(room: Room): Promise<void> {
 	})
 
 	const now = clock.now()
-	let remaining = room.pollIntervalSec * 1000
+	let remaining = roomIntervalSec(room.pollIntervalSec) * 1000
 	if (version?.appliedAt) {
 		remaining -= now - version.appliedAt.getTime()
 	}
@@ -270,6 +317,11 @@ async function openNextQueuedPoll(roomId: string): Promise<void> {
 	})
 	if (openPoll) return
 
+	const room = await prisma.room.findUnique({
+		where: { id: roomId },
+		select: { pollOpenSec: true },
+	})
+
 	const queued = await prisma.poll.findFirst({
 		where: { roomId, status: 'queued' },
 		orderBy: { seq: 'asc' },
@@ -277,7 +329,8 @@ async function openNextQueuedPoll(roomId: string): Promise<void> {
 	if (!queued) return
 
 	const now = new Date(clock.now())
-	const closesAt = new Date(now.getTime() + POLL_OPEN_MS)
+	const openMs = pollOpenMs(room?.pollOpenSec)
+	const closesAt = new Date(now.getTime() + openMs)
 	await prisma.poll.update({
 		where: { id: queued.id },
 		data: { status: 'open', openedAt: now, closesAt },
@@ -305,7 +358,7 @@ async function openNextQueuedPoll(roomId: string): Promise<void> {
 		}
 		scheduler.pollCloseHandle = clock.setTimeout(async () => {
 			await closePoll(queued.id, roomId)
-		}, POLL_OPEN_MS)
+		}, openMs)
 	}
 }
 
@@ -433,7 +486,7 @@ async function queueNextEvolution(
 
 	const now = clock.now()
 	const insertAt = room.createdAt.getTime() + room.lengthSec * 750
-	const intervalMs = Math.max(room.pollIntervalSec, MIN_INTERVAL_SECS) * 1000
+	const intervalMs = tickIntervalMSec(room.pollIntervalSec)
 
 	const scheduler = active.get(roomId)
 	if (scheduler?.continuing) {
@@ -515,7 +568,7 @@ export async function restoreSchedulers(): Promise<void> {
 			where: { roomId: room.id, source: 'outro', status: 'candidate' },
 			orderBy: { appliedAt: 'desc' },
 		})
-		let remaining = room.pollIntervalSec * 1000
+		let remaining = roomIntervalSec(room.pollIntervalSec) * 1000
 		if (version?.appliedAt) {
 			remaining -= now - version.appliedAt.getTime()
 		}

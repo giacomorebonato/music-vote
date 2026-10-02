@@ -10,9 +10,10 @@ import { type BrowserContext, expect, type Page, test } from '@playwright/test'
  *
  * Timing comes entirely from the shipped `MV_E2E_FAST=1` hook (see
  * `backend/polls/scheduler.ts`): the poll open window shrinks to 5s. The room
- * interval still bottoms out at the schema minimum (60s), so a full cycle takes
- * a bit over two interval ticks plus the outro window; the per-file timeout
- * below is sized for that, not padded.
+ * interval still bottoms out at the schema minimum (5s; the room is created
+ * with a generous 60s interval below for realism), so a full cycle takes a bit
+ * over two interval ticks plus the outro window; the per-file timeout below is
+ * sized for that, not padded.
  */
 
 // The server reads this same file via `LLM_MOCK_SCRIPT` (playwright.config.ts).
@@ -121,9 +122,11 @@ test('host runs a set that the audience votes through, undoes, and ends', async 
 	// --- host signs up and creates the room ------------------------------
 	await signUp(host, `e2e-cycle-${Date.now()}@example.com`)
 	await host.goto('/create')
-	// Schema minimums: 5 min / 60s (FAST only shrinks the poll open window).
+	// Schema minimums: 5 min / 5s / 15s (FAST only shrinks the poll open window).
 	await host.getByLabel('Length in minutes (5–60)').fill('5')
-	await host.getByLabel('Poll interval in seconds (60–600)').fill('60')
+	await host.getByLabel('Poll interval in seconds (5–600)').fill('60')
+	// Exercise the per-room open-window field; FAST still forces 5s at runtime.
+	await host.getByLabel('Poll open window in seconds (15–600)').fill('15')
 	await host.getByTestId('create-room').click()
 	await expect(host).toHaveURL(/\/r\/[^/]+\/host/)
 	await expect(host.getByTestId('room-status')).toHaveText('lobby')

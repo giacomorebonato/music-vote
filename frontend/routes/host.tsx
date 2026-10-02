@@ -73,6 +73,10 @@ function HostConsole({ roomId }: { roomId: string }) {
 		counts: Record<string, number>
 	} | null>(null)
 	const [toast, setToast] = useState<string | null>(null)
+	// Set while the backend turns a winning poll vote into a new pattern (an
+	// evolution `code_update` frame): the model call is seconds-long and the host
+	// should see that work instead of a silent gap.
+	const [pendingEvolution, setPendingEvolution] = useState(false)
 
 	const playerRef = useRef<StrudelPlayerRef | null>(null)
 	const seededRef = useRef(false)
@@ -234,19 +238,40 @@ function HostConsole({ roomId }: { roomId: string }) {
 		(event: WsEvent) => {
 			switch (event.type) {
 				case 'code_update':
+					setPendingEvolution(false)
 					handleCodeUpdate(event)
 					break
 				case 'vote_count':
 					setVoteTally({ pollId: event.pollId, counts: event.counts })
 					break
 				case 'poll_opened':
-				case 'poll_closed':
+					// A follow-up poll is up, so nothing is being generated anymore.
+					setPendingEvolution(false)
 					// Refetch rather than using the payload: the event carries option
 					// labels (no keys) and no zero-filled counts, and a poll that opens
 					// with zero votes must still show up on the console.
 					void refetchRoom()
 					break
+				case 'poll_closed': {
+					// A winning evolution vote starts backend model work; the frame
+					// (or the warning toast) clears the wait. `winningOption` is an
+					// option key: `yes`/`no` marks an evolution poll, `wrap`/`continue`
+					// an end poll, and a skipped/overdue close has no winner — none of
+					// those generate a pattern, so no indicator for them.
+					const { winningOption } = event
+					setPendingEvolution(
+						winningOption !== null &&
+							winningOption !== 'continue' &&
+							winningOption !== 'wrap',
+					)
+					// Refetch rather than using the payload: the event carries option
+					// labels (no keys) and no zero-filled counts, and a poll that opens
+					// with zero votes must still show up on the console.
+					void refetchRoom()
+					break
+				}
 				case 'warning':
+					setPendingEvolution(false)
 					showToast(event.message)
 					break
 				case 'pattern_rejected':
@@ -259,6 +284,7 @@ function HostConsole({ roomId }: { roomId: string }) {
 					})
 					break
 				case 'room_status':
+					setPendingEvolution(false)
 					void refetchRoom()
 					break
 				default:
@@ -271,6 +297,9 @@ function HostConsole({ roomId }: { roomId: string }) {
 	// Spec "Host WS drop": the browser is the audio engine, so a dropped socket
 	// means playback may have stopped. Refetch the server truth and re-apply.
 	const handleReconnect = useCallback(() => {
+		// No way to learn whether a generation was mid-flight while offline; a
+		// stale indicator is worse than a missed one, so drop it on resync.
+		setPendingEvolution(false)
 		void (async () => {
 			try {
 				const fresh = await queryClient.fetchQuery(
@@ -353,7 +382,7 @@ function HostConsole({ roomId }: { roomId: string }) {
 						</h1>
 						<p className="text-sm opacity-70">
 							{Math.round(room.lengthSec / 60)} min · poll every{' '}
-							{room.pollIntervalSec}s
+							{room.pollIntervalSec}s · {room.pollOpenSec}s to vote
 						</p>
 					</div>
 					<div className="flex items-center gap-2">
@@ -414,7 +443,14 @@ function HostConsole({ roomId }: { roomId: string }) {
 								startRoom.mutate({ roomId }, mutationOptionsFor())
 							}}
 						>
-							Start set
+							{startRoom.isPending ? (
+								<span className="flex items-center gap-2">
+									<span className="loading loading-spinner loading-sm" />
+									Starting set…
+								</span>
+							) : (
+								'Start set'
+							)}
 						</button>
 					) : null}
 
@@ -468,6 +504,13 @@ function HostConsole({ roomId }: { roomId: string }) {
 								Skip poll
 							</button>
 						</>
+					) : null}
+
+					{pendingEvolution ? (
+						<span className="badge badge-ghost" data-testid="evolution-pending">
+							<span className="loading loading-spinner" />
+							Applying poll result…
+						</span>
 					) : null}
 
 					{room.status !== 'ended' ? (
