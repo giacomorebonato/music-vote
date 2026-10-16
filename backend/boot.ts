@@ -21,7 +21,6 @@ export async function bootSchedulers(
 	try {
 		await restore()
 	} catch (error) {
-		// biome-ignore lint/suspicious/noConsole: boot-time restore faults must reach the deploy logs
 		console.error(
 			'boot: scheduler restore failed; continuing without restored timers',
 			error,

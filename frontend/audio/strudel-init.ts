@@ -62,8 +62,7 @@ import {
 } from '@strudel/web'
 
 export type ApplyResult =
-	| { ok: true; audioRunning: boolean }
-	| { ok: false; error: string }
+	{ ok: true; audioRunning: boolean } | { ok: false; error: string }
 
 let initPromise: Promise<unknown> | null = null
 let lastEvalError: Error | null = null

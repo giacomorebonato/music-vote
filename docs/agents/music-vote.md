@@ -18,21 +18,21 @@ login. LLM calls happen server-side only — API keys never reach a browser.
 
 `.env.example` mirrors this list; the code is the source of truth.
 
-| Var | Required | Default | Notes |
-|---|---|---|---|
-| `DATABASE_URL` | prod | `file:./dev.db` | Prod is baked into the Dockerfile (`file:/data/prod.db`), not a secret. |
-| `BETTER_AUTH_SECRET` | yes | — | `openssl rand -base64 32`. Rotating it logs out every user. |
-| `BETTER_AUTH_URL` | yes | — | `http://localhost:3000` dev / `https://music-vote.fly.dev` prod. |
-| `PORT` | no | `3000` | Must match `fly.toml` `internal_port`. |
-| `LLM_PROVIDER` | no | `ollama` | `ollama` or `mock`. Anything else throws at first LLM call. |
-| `OLLAMA_BASE_URL` | no | `http://localhost:11434` | Local Ollama in dev; `https://ollama.com` for cloud in prod. |
-| `OLLAMA_MODEL` | yes (ollama) | — | Model tag, e.g. `llama3.1`. Missing → `OLLAMA_MODEL is required`. |
-| `OLLAMA_API_KEY` | no | — | Sent as `Authorization: Bearer <key>`. Ollama cloud key → Fly secret. |
-| `LLM_MOCK_SCRIPT` | yes (mock) | — | Path to `{ "responses": string[] }`. Each `getLlmProvider()` call builds a fresh provider that re-reads the file from index 0 and pops responses in order (one instance throws when exhausted), so tests never hit a real model. |
-| `SSR_CACHE_DIR` | no | `mkdtemp` dir | Bot-prerender HTML cache — see [bot-ssr.md](bot-ssr.md). |
-| `LIGHTPANDA_EXECUTABLE_PATH` | no | `~/.cache/lightpanda-node/lightpanda` | Prod sets it in the Dockerfile. Unset or empty falls back to the default. |
-| `MV_E2E_FAST` | test-only | — | `1` shrinks the poll open window to 5s and clamps the interval minimum to 10s (`backend/polls/scheduler.ts`). Set by `playwright.config.ts` only; takes precedence over `MV_TEST_POLL_OPEN_SECS`. |
-| `MV_TEST_POLL_OPEN_SECS` | no | — | Dev-only: overrides the per-room poll open window (countdown after voting; create-room field `pollOpenSec`, default 45s with a 15s form floor). Positive integers only; invalid values ignored. `MV_E2E_FAST` keeps precedence (`backend/polls/scheduler.ts`). |
+| Var                          | Required     | Default                               | Notes                                                                                                                                                                                                                                                          |
+| ---------------------------- | ------------ | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`               | prod         | `file:./dev.db`                       | Prod is baked into the Dockerfile (`file:/data/prod.db`), not a secret.                                                                                                                                                                                        |
+| `BETTER_AUTH_SECRET`         | yes          | —                                     | `openssl rand -base64 32`. Rotating it logs out every user.                                                                                                                                                                                                    |
+| `BETTER_AUTH_URL`            | yes          | —                                     | `http://localhost:3000` dev / `https://music-vote.fly.dev` prod.                                                                                                                                                                                               |
+| `PORT`                       | no           | `3000`                                | Must match `fly.toml` `internal_port`.                                                                                                                                                                                                                         |
+| `LLM_PROVIDER`               | no           | `ollama`                              | `ollama` or `mock`. Anything else throws at first LLM call.                                                                                                                                                                                                    |
+| `OLLAMA_BASE_URL`            | no           | `http://localhost:11434`              | Local Ollama in dev; `https://ollama.com` for cloud in prod.                                                                                                                                                                                                   |
+| `OLLAMA_MODEL`               | yes (ollama) | —                                     | Model tag, e.g. `llama3.1`. Missing → `OLLAMA_MODEL is required`.                                                                                                                                                                                              |
+| `OLLAMA_API_KEY`             | no           | —                                     | Sent as `Authorization: Bearer <key>`. Ollama cloud key → Fly secret.                                                                                                                                                                                          |
+| `LLM_MOCK_SCRIPT`            | yes (mock)   | —                                     | Path to `{ "responses": string[] }`. Each `getLlmProvider()` call builds a fresh provider that re-reads the file from index 0 and pops responses in order (one instance throws when exhausted), so tests never hit a real model.                               |
+| `SSR_CACHE_DIR`              | no           | `mkdtemp` dir                         | Bot-prerender HTML cache — see [bot-ssr.md](bot-ssr.md).                                                                                                                                                                                                       |
+| `LIGHTPANDA_EXECUTABLE_PATH` | no           | `~/.cache/lightpanda-node/lightpanda` | Prod sets it in the Dockerfile. Unset or empty falls back to the default.                                                                                                                                                                                      |
+| `MV_E2E_FAST`                | test-only    | —                                     | `1` shrinks the poll open window to 5s and clamps the interval minimum to 10s (`backend/polls/scheduler.ts`). Set by `playwright.config.ts` only; takes precedence over `MV_TEST_POLL_OPEN_SECS`.                                                              |
+| `MV_TEST_POLL_OPEN_SECS`     | no           | —                                     | Dev-only: overrides the per-room poll open window (countdown after voting; create-room field `pollOpenSec`, default 45s with a 15s form floor). Positive integers only; invalid values ignored. `MV_E2E_FAST` keeps precedence (`backend/polls/scheduler.ts`). |
 
 ## Local run with the mock LLM
 
@@ -111,7 +111,7 @@ Redeploy after code changes: `fly deploy`. Migrations run on every boot
 
 ## Known limitations
 
-- **Host disconnect = music stops.** The host browser *is* the audio engine
+- **Host disconnect = music stops.** The host browser _is_ the audio engine
   (`@strudel/web`); if it closes or loses its socket, the venue goes silent.
   The room state survives on the server and the host can reconnect, but
   playback is not restored to the exact phase — the current pattern restarts.

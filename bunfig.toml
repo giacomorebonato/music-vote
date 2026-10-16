@@ -1,2 +1,17 @@
 [serve.static]
 plugins = ["bun-plugin-tailwind"]
+
+[fmt]
+useTabs = true
+semi = false
+singleQuote = true
+ignorePatterns = [
+	".superpowers/**",
+	".pi-subagents/**",
+	"docs/superpowers/**",
+	"*.lock.yaml",
+]
+
+# Keep nested scripts on the invoking Bun instead of the Tailwind peer binary.
+[run]
+bun = true

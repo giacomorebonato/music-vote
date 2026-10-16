@@ -7,5 +7,5 @@ if [ "$(git branch --show-current)" = main ]; then
 		echo "Remove unstaged and untracked changes before merging so tests verify the merge contents." >&2
 		exit 1
 	fi
-	bun run check:full
+	bun run verify
 fi

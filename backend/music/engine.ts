@@ -133,7 +133,6 @@ export async function generateInitialPattern(
 	return { code, doc }
 }
 
-// biome-ignore lint/complexity/useMaxParams: public orchestration signature mandated by Task 6 brief
 export async function generateEvolution(
 	provider: LlmProvider,
 	doc: StateDoc,

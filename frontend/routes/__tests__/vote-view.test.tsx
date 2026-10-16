@@ -77,8 +77,8 @@ test('live with no open poll shows the next-poll wait', () => {
 })
 
 test('re-claims a failed session claim so a lost request does not brick voting', async () => {
-	const claim = mock(
-		(): Promise<unknown> => Promise.reject(new Error('network down')),
+	const claim = mock((): Promise<unknown> =>
+		Promise.reject(new Error('network down')),
 	)
 	const controller = createClaimController(claim)
 
@@ -92,8 +92,8 @@ test('re-claims a failed session claim so a lost request does not brick voting',
 })
 
 test('a successful claim is reused across votes', async () => {
-	const claim = mock(
-		(): Promise<unknown> => Promise.resolve({ token: 'session' }),
+	const claim = mock((): Promise<unknown> =>
+		Promise.resolve({ token: 'session' }),
 	)
 	const controller = createClaimController(claim)
 

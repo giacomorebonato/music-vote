@@ -187,7 +187,6 @@ async function generateOutroOrWarn(
 			room.currentCode ?? '',
 		)
 	} catch (error) {
-		// biome-ignore lint/suspicious/noConsole: scheduler logs no-change polls
 		console.info(`Outro generation failed for room ${roomId}: ${String(error)}`)
 		hub.publishHost(roomId, {
 			type: 'warning',

@@ -10,11 +10,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Bun 1.4.2 is now stable. Pin to the version declared in .bun-version
-      # and package.json engines so CI is reproducible.
+      # Native lint/fmt currently require canary; share the development version file.
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version-file: .bun-version
       - run: bun install
         env:
           DATABASE_URL: file:./dev.db
@@ -22,7 +21,7 @@ jobs:
         env:
           DATABASE_URL: file:./dev.db
       - run: bun x playwright install --with-deps chromium
-      - run: bun run check:full
+      - run: bun run verify
 
   deploy:
     needs: [check]

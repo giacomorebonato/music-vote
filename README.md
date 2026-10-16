@@ -17,7 +17,7 @@ cp .env.example .env # set BETTER_AUTH_SECRET (openssl rand -base64 32)
 bun run dev          # http://localhost:3000
 ```
 
-Requires Bun 1.4.2+ (see `.bun-version`).
+Development requires Bun canary (see `.bun-version`) for native `bun lint` and `bun fmt`. The production runtime remains Bun 1.4.2.
 
 ## Run locally with the mock LLM
 
@@ -50,12 +50,14 @@ path.
 
 ## Verification
 
-- `bun run check` — biome + typecheck + knip + unit tests. Run before claiming work done.
-- `bun run check:full` — adds Playwright E2E (the full democratic-music cycle). Run for UI/auth/route changes.
-- `bun run premerge` — `check` then fast-forward merge → main and push.
+- `bun check` — native TypeScript type checking.
+- `bun lint` — native lint checks; use `--fix` to apply fixes.
+- `bun fmt` — native formatting; use `--check` to verify without writing.
+- `bun run verify` — native checks + knip + all unit tests and both Playwright suites.
+- `bun run premerge` — `verify`, then fast-forward merge → main and push.
 
-Git hooks (`.githooks/`, wired by `bootstrap`) run biome + typecheck at commit
-and the full gate at push.
+Git hooks (`.githooks/`, wired by `bootstrap`) require native checks at commit
+and unit tests at push; merges and pushes to main require the complete `verify` gate.
 
 ## License
 

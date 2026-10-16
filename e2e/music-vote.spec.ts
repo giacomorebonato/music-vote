@@ -107,7 +107,6 @@ async function sessionToken(context: BrowserContext): Promise<string> {
 	return token
 }
 
-// biome-ignore lint/complexity/noExcessiveLinesPerFunction: one linear end-to-end scenario, kept as a single scrollable narrative
 test('host runs a set that the audience votes through, undoes, and ends', async ({
 	browser,
 }) => {

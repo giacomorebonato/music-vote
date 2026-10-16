@@ -23,5 +23,6 @@
 	"ignoreDependencies": ["bun-plugin-tailwind", "@lightpanda/browser"],
 	"ignoreUnresolved": ["bun-types"],
 	"includeEntryExports": true,
-	"treatConfigHintsAsErrors": true
+	"treatConfigHintsAsErrors": true,
+	"ignoreBinaries": ["check", "lint", "fmt"]
 }

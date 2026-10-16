@@ -2,22 +2,23 @@
 
 ## Scripts
 
-`package.json` is the source of truth. The non-obvious ones:
+`bun check`, `bun lint`, and `bun fmt` are native Bun commands. There are no package scripts with those names, and no `format` or `typecheck` aliases. Development and CI use Bun canary from `.bun-version`: Bun 1.4.3 has native type checking but does not yet ship the formatter/linter used here. Production keeps the stable runtime pinned in `Dockerfile`. `[run].bun = true` keeps nested scripts on the invoking Bun rather than the older Bun binary installed as a Tailwind plugin peer dependency. Knip lists native subcommands in `ignoreBinaries` because its shell parser otherwise treats them as external packages.
 
-- `bun run dev` — dev server with HMR (`bun --hot backend/server.ts`)
-- `bun run build` — production bundle via `scripts/build.ts` (`Bun.build`), React Compiler enabled — see [react-compiler.md](react-compiler.md) and [conventions.md](conventions.md#build-internals)
-- `bun run start` — production server (`NODE_ENV=production bun backend/server.ts`)
-- `bun run test` — unit tests (`bun test backend shared frontend`; co-located `__tests__/` next to each source)
-- `bun run test:e2e` — Playwright E2E
-- `bun run test:e2e:ssr` — SSR E2E against the prod server (separate `playwright.ssr.config.ts`; clears its cache in `e2e/global-setup.ts`). The default `playwright.config.ts` ignores `ssr.spec.ts`
-- `bun run check` — pre-merge gate (`scripts/check.sh`): Biome check + typecheck + knip + unit tests. Shared with CI. Run **before claiming any work done**
-- `bun run check:full` — `check` + both Playwright suites (dev and production SSR), each with a fresh server on port 3100 (`PLAYWRIGHT_PORT` overrides it), keeping the dev server independent. Run before claiming UI/auth/route work done (E2E is intentionally excluded from `check` for speed)
-- `bun check --staged`, `bun lint --staged`, `bun fmt --staged` — verify the staged index in an isolated snapshot, including partially staged files. Biome checks changed files; staged `check` also runs project-wide typecheck + knip. With no staged changes these are no-ops; deletions still run typecheck + knip. `lint` and `fmt` without `--staged` verify the whole project. These commands never write fixes.
-- `bun run format` — Biome check + format, **writes fixes** (`biome check --write .`); `check` verifies without writing
-- `bun run bootstrap` — fresh-clone setup (deps + APM skills/MCP + Prisma client + migrate dev DB + git hooks); idempotent
-- `bun run premerge` — `check:full`, then fast-forward current branch → main and push
-- `bun run db:migrate` — `prisma migrate dev && prisma generate` (v7: `migrate dev` no longer auto-generates the client) — see [prisma.md](prisma.md)
-- `bun run db:reset` — `prisma migrate reset`
+- `bun check` — typecheck the project using `tsconfig.json`; never writes files. Bun does not support `check --staged`.
+- `bun lint` — lint the project; `--fix` applies fixes and `--staged` limits the selected files.
+- `bun fmt` — format files using `[fmt]` in `bunfig.toml`. `--check` verifies without writing. `--staged` selects staged files; without `--check` it writes and re-stages them, refusing partially staged files.
+- `bun run verify` — native type/lint/format checks, knip, isolated unit tests, then both Playwright suites (development and production SSR) on a fresh server at port 3100 (`PLAYWRIGHT_PORT` overrides it). This is the complete merge/CI gate.
+- `bun run dev` — dev server with HMR (`bun --hot backend/server.ts`).
+- `bun run build` — production bundle via `scripts/build.ts`, React Compiler enabled; see [react-compiler.md](react-compiler.md).
+- `bun run start` — production server.
+- `bun run test` — unit tests (`bun test backend shared frontend`); pass `--parallel` for isolation.
+- `bun run test:e2e` — development Playwright suite.
+- `bun run test:e2e:ssr` — production SSR Playwright suite.
+- `bun x --no-install knip` — unused dependencies, files, and exports. Set `DATABASE_URL=file:./dev.db` when no `.env` exists so Knip can load the Prisma config.
+- `bun run bootstrap` — dependencies, APM skills/MCP, Prisma client, development DB migration, and Git hook installation.
+- `bun run premerge` — `verify`, then fast-forward current branch → main and push.
+- `bun run db:migrate` — Prisma development migration and client generation.
+- `bun run db:reset` — Prisma migration reset.
 
 `postinstall` runs `prisma generate`.
 
@@ -25,7 +26,7 @@
 
 Each DB-backed unit test file owns and migrates its own SQLite file at module load — `prisma/models-test.db`, `prisma/rooms-test.db`, `prisma/scheduler-test.db`, `prisma/votes-test.db`. They must never share one: `bun test --parallel` runs the files in separate worker processes, and two `prisma migrate deploy` runs against the same fresh SQLite file deadlock (`database is locked`) and leave it schema-less, so a cold checkout fails the gate. `prisma/test.db` belongs to the Playwright suites alone (`scripts/e2e-reset-db.sh`); the unit tests never touch it.
 
-Run the gate (`bun run check`) — or `bun run test --parallel` — for unit tests. A **bare** `bun test` (Bun 1.4.2's default, non-isolated mode) fails ~42 DB/mock tests for pre-existing reasons unrelated to product code: `mock.module` is process-global and leaks between files, and the shared Prisma client gets built against `.env`'s `dev.db`. Those failures are a harness artifact — do not "fix" them by weakening tests. `--isolate` is CLI-only in 1.4.2; `[test] isolate` / `[test] parallel` in `bunfig.toml` are ignored.
+Run the gate (`bun run verify`) — or `bun run test --parallel` — for unit tests. A **bare** `bun test` (Bun 1.4.2's default, non-isolated mode) fails ~42 DB/mock tests for pre-existing reasons unrelated to product code: `mock.module` is process-global and leaks between files, and the shared Prisma client gets built against `.env`'s `dev.db`. Those failures are a harness artifact — do not "fix" them by weakening tests. `--isolate` is CLI-only in 1.4.2; `[test] isolate` / `[test] parallel` in `bunfig.toml` are ignored.
 
 ## Env vars
 
@@ -41,11 +42,13 @@ Run the gate (`bun run check`) — or `bun run test --parallel` — for unit tes
 
 ## Git hooks
 
-`.githooks/pre-commit` requires `bun check --staged`, `bun lint --staged`, and `bun fmt --staged`. `.githooks/pre-push` runs `check`, or `check:full` when pushing main (requiring a clean tree at the commit being pushed). `.githooks/pre-merge-commit` runs `check:full` for merge commits on main; pre-commit also invokes it for manually completed merges. Git does not invoke a merge hook for fast-forwards, so use `bun run premerge` for a tested fast-forward; the main-push hook also enforces the full gate. CI runs `check:full` for main and its pull requests; configure branch protection to require the `check` job to prevent remote bypasses. `bun run bootstrap` sets `core.hooksPath = .githooks`.
+`.githooks/pre-commit` runs native `bun check`, `bun lint --staged`, and `bun fmt --check --staged`. Type checking covers the project; lint and formatting use Bun's native staged-file selection. Hooks do not apply fixes or stage files. There is no custom index snapshot or hidden wrapper.
+
+`.githooks/pre-push` runs native checks, knip, and unit tests; pushes to main run `bun run verify` and require a clean tree at the commit being pushed. `.githooks/pre-merge-commit` runs `verify` for merge commits on main, including manually completed merges via pre-commit. Git has no merge hook for fast-forwards: use `bun run premerge` for a tested fast-forward. CI runs `verify` for main and its pull requests; require its `check` job in branch protection to prevent remote bypasses. `bun run bootstrap` sets `core.hooksPath = .githooks`.
 
 ## Knip
 
-Knip runs in CI and inside `bun run check`; it **fails** on unused dependencies, files, or exports. Run it after any file add/move.
+Knip runs in CI and inside `bun run verify`; it **fails** on unused dependencies, files, or exports. Run it after any file add/move.
 
 ## Skills / MCP
 

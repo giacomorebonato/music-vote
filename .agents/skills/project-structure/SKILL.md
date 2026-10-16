@@ -27,17 +27,17 @@ files allowed at repo root.
 
 ## Placement rules
 
-| Adding… | Location | Wiring |
-|---|---|---|
-| React component | `frontend/components/<name>.tsx` | import from `@frontend/components/…` |
-| Route component | `frontend/routes/<name>.tsx` | register in `frontend/router.tsx` `routeTree` |
-| tRPC route (router) | `backend/trpc/<name>.ts` | mount in `backend/trpc/root.ts` `appRouter` |
-| Shared Zod schema | `shared/schemas/<name>.ts` | reuse in tRPC input + TanStack Form `validators` |
-| Backend helper (server-level) | `backend/<name>.ts` | e.g. `normalize-trpc-request.ts` |
-| Backend auth/db module | `backend/auth/` or `backend/db/` | only if it grows past one file |
-| Unit test | `__tests__/<source-name>.test.ts` **co-located next to source** | see below |
-| E2E test | `e2e/<name>.spec.ts` | `e2e/global-setup.ts` for shared setup |
-| Build script | `scripts/<name>.ts` | add to `package.json` scripts if runnable |
+| Adding…                       | Location                                                        | Wiring                                           |
+| ----------------------------- | --------------------------------------------------------------- | ------------------------------------------------ |
+| React component               | `frontend/components/<name>.tsx`                                | import from `@frontend/components/…`             |
+| Route component               | `frontend/routes/<name>.tsx`                                    | register in `frontend/router.tsx` `routeTree`    |
+| tRPC route (router)           | `backend/trpc/<name>.ts`                                        | mount in `backend/trpc/root.ts` `appRouter`      |
+| Shared Zod schema             | `shared/schemas/<name>.ts`                                      | reuse in tRPC input + TanStack Form `validators` |
+| Backend helper (server-level) | `backend/<name>.ts`                                             | e.g. `normalize-trpc-request.ts`                 |
+| Backend auth/db module        | `backend/auth/` or `backend/db/`                                | only if it grows past one file                   |
+| Unit test                     | `__tests__/<source-name>.test.ts` **co-located next to source** | see below                                        |
+| E2E test                      | `e2e/<name>.spec.ts`                                            | `e2e/global-setup.ts` for shared setup           |
+| Build script                  | `scripts/<name>.ts`                                             | add to `package.json` scripts if runnable        |
 
 ## Co-located unit tests (enforced)
 
@@ -60,7 +60,7 @@ without a test is acceptable; a test far from its source is not.
   only the file name is kebab-case.
 - Conventionally uppercase docs are the only exceptions: `AGENTS.md`,
   `README.md`, `LICENSE`.
-- Biome enforces `noDefaultExport` for `.ts`/`.tsx` (Playwright specs exempt).
+- Use named exports for `.ts`/`.tsx` (Playwright specs exempt).
   Don't add `export default` to app code.
 
 ## Do not (without explicit reason)
@@ -78,14 +78,15 @@ without a test is acceptable; a test far from its source is not.
 ## Verification gate (run after every add/move)
 
 ```sh
-bun run format      # Biome check --write (lint + format, writes fixes)
-bun run typecheck   # tsc --noEmit — catches broken imports / references
-bun run knip        # catches now-unused exports / dead files after a move
-bun run test        # unit tests still resolve from new paths
-# or all at once: bun run check
+bun fmt             # Native formatter (writes fixes)
+bun lint            # Native linter (verify-only)
+bun check           # Native type checker — catches broken imports / references
+bun x --no-install knip        # catches now-unused exports / dead files after a move
+bun run test --parallel # unit tests still resolve from new paths
+# or all at once: bun run verify
 ```
 
-A move is not done until all four pass. If `knip` flags the moved file as
+A move is not done until all checks pass. If `knip` flags the moved file as
 unused, re-check that every importer was updated to the new path. If `knip`
 flags an export as unused, the move likely orphaned it — re-wire the
 importer.

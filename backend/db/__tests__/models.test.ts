@@ -5,7 +5,7 @@ import { execSync } from 'node:child_process'
 import { createRoomSchema } from '@shared/schemas/room'
 
 // Unit tests run against a real, migrated SQLite file (prisma/models-test.db)
-// instead of the dev DB: CI runs `bun run check` without applying migrations to
+// instead of the dev DB: CI runs `bun run verify` without applying migrations to
 // dev.db, and a cold checkout has no DB at all.
 //
 // Every DB-backed test file owns its own `prisma/<name>-test.db` and migrates it

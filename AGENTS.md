@@ -7,8 +7,9 @@ music-vote: crowd-voted AI live music on Bun — React 19 SPA (TanStack Router/Q
 - `bun run bootstrap` — fresh-clone setup (idempotent)
 - `bun run dev` — dev server with HMR
 - `bun run build` — production bundle (React Compiler on)
-- `bun run check` — run before claiming work done; `bun run check:full` adds E2E for UI/auth/route changes
-- `bun run premerge` — `check:full` (unit + both Playwright suites), then fast-forward → main and push
+- `bun check`, `bun lint`, `bun fmt` — native Bun type checker, linter, and formatter (no package script overrides)
+- `bun run verify` — native checks + knip + all unit and Playwright tests; run before claiming work done
+- `bun run premerge` — `verify` (unit + both Playwright suites), then fast-forward → main and push
 
 Aliases `@backend/* @frontend/* @shared/*`; unit tests co-located in `__tests__/`; placement rules in `.agents/skills/project-structure/SKILL.md`.
 

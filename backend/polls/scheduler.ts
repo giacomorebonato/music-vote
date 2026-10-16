@@ -235,7 +235,6 @@ async function liveTick(roomId: string, intervalMs: number): Promise<void> {
 	try {
 		await healPollChain(roomId, room, now)
 	} catch (error) {
-		// biome-ignore lint/suspicious/noConsole: scheduler poll-chain faults must reach the deploy logs
 		console.error(`Poll tick maintenance failed in room ${roomId}`, error)
 	}
 	scheduler.intervalHandle = clock.setTimeout(async () => {
@@ -277,7 +276,6 @@ async function healPollChain(
 	try {
 		await queueNextEvolution(roomId, room)
 	} catch (error) {
-		// biome-ignore lint/suspicious/noConsole: scheduler poll-chain faults must reach the deploy logs
 		console.error(`Poll chain rebuild failed for ${roomId}`, error)
 	}
 	await openNextQueuedPoll(roomId)
@@ -465,7 +463,6 @@ async function applyPollOutcome(
 			await runEvolution(room, poll, winnerLabel)
 		}
 	} catch (error) {
-		// biome-ignore lint/suspicious/noConsole: scheduler poll-chain faults must reach the deploy logs
 		console.error(`Poll ${poll.id} winner handling crashed`, error)
 		hub.publishHost(roomId, {
 			type: 'warning',
@@ -521,7 +518,6 @@ async function queueNextEvolutionAfterClose(
 	try {
 		await queueNextEvolution(roomId, room)
 	} catch (error) {
-		// biome-ignore lint/suspicious/noConsole: scheduler poll-chain faults must reach the deploy logs
 		console.error(`Failed to queue the next evolution for ${roomId}`, error)
 		// The next liveTick's self-heal retries the queue rebuild.
 	}
@@ -550,7 +546,6 @@ async function runEvolution(
 	)
 
 	if (!result || !compileCheck(result.code).ok) {
-		// biome-ignore lint/suspicious/noConsole: scheduler logs no-change polls
 		console.info(`Poll ${poll.id} no change`)
 		hub.publishHost(room.id, {
 			type: 'warning',
@@ -735,7 +730,6 @@ function pickWinner(
 	const tied = options.filter((option) => counts.get(option.key) === max)
 	if (tied.length === 1) return tied[0].key
 	const seed = hashStringToSeed(pollId)
-	// biome-ignore lint/suspicious/noConsole: spec requires tie-break seed logged
 	console.info(`tie-break seed=${seed} for poll ${pollId}`)
 	return tied[seededRandomInt(seed, tied.length)].key
 }

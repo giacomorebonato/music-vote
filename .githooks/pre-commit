@@ -2,9 +2,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-bun run check --staged
-bun run lint --staged
-bun run fmt --staged
+bun check
+bun lint --staged
+bun fmt --check --staged
 
 # Also cover merges finished with `git commit` after --no-commit or conflicts.
 if git rev-parse -q --verify MERGE_HEAD >/dev/null; then

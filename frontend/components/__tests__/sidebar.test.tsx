@@ -22,7 +22,6 @@ mock.module('@frontend/lib/auth', () => ({
 }))
 
 mock.module('@tanstack/react-router', () => ({
-	// biome-ignore lint/style/useNamingConvention: must mirror the tanstack router export name
 	Link: FakeLink,
 }))
 
