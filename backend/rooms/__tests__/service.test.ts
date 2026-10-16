@@ -367,6 +367,128 @@ test('reportApplyResult(false) rejects version', async () => {
 	})
 })
 
+test('skipping a voted poll tells listeners it was skipped', async () => {
+	const host = await makeHost()
+	const room = await service.createRoom(host.id, baseInput())
+	await service.startRoom(room.id, host.id)
+	const poll = await prisma.poll.findFirstOrThrow({
+		where: { roomId: room.id },
+	})
+	await prisma.poll.update({
+		where: { id: poll.id },
+		data: {
+			status: 'open',
+			openedAt: new Date(),
+			closesAt: new Date(Date.now() + 20_000),
+		},
+	})
+	await prisma.vote.create({
+		data: { pollId: poll.id, sessionToken: 'dancer', choice: 'sharper-drums' },
+	})
+	await service.skipPoll(room.id, host.id)
+	const skipped = await prisma.poll.findUniqueOrThrow({
+		where: { id: poll.id },
+	})
+	expect(skipped.deliveryStatus).toBe('skipped')
+	expect(skipped.winningOption).toBeNull()
+	const audienceEvents = hubSpies.publishAudience.mock.calls as [
+		string,
+		WsEvent,
+	][]
+	expect(audienceEvents.at(-1)?.[1]).toEqual({
+		type: 'music_result',
+		pollId: poll.id,
+	})
+})
+
+test('host confirmation applies the candidate and informs listeners', async () => {
+	const host = await makeHost()
+	const room = await service.createRoom(host.id, baseInput())
+	await service.startRoom(room.id, host.id)
+	const liveRoom = await prisma.room.findUniqueOrThrow({
+		where: { id: room.id },
+	})
+	const poll = await prisma.poll.findFirstOrThrow({
+		where: { roomId: room.id },
+	})
+	await prisma.poll.update({
+		where: { id: poll.id },
+		data: {
+			status: 'closed',
+			winningOption: 'sharper-drums',
+			deliveryStatus: 'preparing',
+			closedAt: new Date(),
+		},
+	})
+	const candidate = await prisma.patternVersion.create({
+		data: {
+			roomId: room.id,
+			code: 's("bd*2")',
+			source: poll.id,
+			status: 'candidate',
+			baseVersionId: liveRoom.currentVersionId,
+			stateDoc: { marker: 'confirmed change' },
+		},
+	})
+	await service.reportApplyResult(room.id, host.id, candidate.id, true)
+	await service.reportApplyResult(room.id, host.id, candidate.id, true)
+	const applied = await prisma.room.findUniqueOrThrow({
+		where: { id: room.id },
+	})
+	const result = await prisma.poll.findUniqueOrThrow({ where: { id: poll.id } })
+	expect(applied.currentCode).toBe('s("bd*2")')
+	expect(applied.currentVersionId).toBe(candidate.id)
+	expect(applied.stateDoc).toEqual({ marker: 'confirmed change' })
+	expect(result.deliveryStatus).toBe('applied')
+	const audienceEvents = hubSpies.publishAudience.mock.calls as [
+		string,
+		WsEvent,
+	][]
+	expect(audienceEvents).toHaveLength(1)
+	expect(audienceEvents.at(-1)?.[1]).toEqual({
+		type: 'music_result',
+		pollId: poll.id,
+	})
+})
+
+test('late confirmation cannot replace a newer version', async () => {
+	const host = await makeHost()
+	const room = await service.createRoom(host.id, baseInput())
+	await service.startRoom(room.id, host.id)
+	const liveRoom = await prisma.room.findUniqueOrThrow({
+		where: { id: room.id },
+	})
+	const poll = await prisma.poll.findFirstOrThrow({
+		where: { roomId: room.id },
+	})
+	await prisma.poll.update({
+		where: { id: poll.id },
+		data: { status: 'closed', deliveryStatus: 'preparing' },
+	})
+	const candidate = await prisma.patternVersion.create({
+		data: {
+			roomId: room.id,
+			code: 's("bd*2")',
+			source: poll.id,
+			status: 'candidate',
+			baseVersionId: liveRoom.currentVersionId,
+		},
+	})
+	await prisma.room.update({
+		where: { id: room.id },
+		data: { currentVersionId: 'newer' },
+	})
+	await expect(
+		service.reportApplyResult(room.id, host.id, candidate.id, true),
+	).rejects.toThrow('no longer current')
+	const after = await prisma.room.findUniqueOrThrow({ where: { id: room.id } })
+	const rejected = await prisma.patternVersion.findUniqueOrThrow({
+		where: { id: candidate.id },
+	})
+	expect(after.currentCode).toBe(liveRoom.currentCode)
+	expect(rejected.status).toBe('rejected')
+})
+
 test('reportApplyResult rejects a non-owner and leaves the version untouched', async () => {
 	const host = await makeHost()
 	const other = await makeHost()

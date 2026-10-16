@@ -2,12 +2,14 @@
 
 Crowd-voted AI live music. A host opens a room at a venue, picks a vibe, and
 the music starts playing from the host's browser into the PA. Phones join by
-scanning a QR code — no login, no app — and vote yes/no on musical directions
-("should this sound more 80s?"). Each winning answer is turned into new
-live-coded Strudel by an LLM, validated server-side, applied at the next cycle
-boundary, and the set keeps evolving until an AI outro closes it with a
-timeline of every vote that shaped the performance. The server conducts and
-owns the room state; the host browser is the audio engine; phones only vote.
+scanning a QR code — no login, no app — and choose between two musical
+directions. A strict majority wins; ties and rounds without votes keep the
+current groove. Occasional polls let the crowd vote to stay with it. A winning
+change is turned into new live-coded Strudel by an LLM, validated server-side,
+and sent to the host browser for playback. Phones show the result, whether the
+host applied it, and when the next vote is due. The set keeps evolving until
+an AI outro closes it with a timeline of the crowd's decisions. The server
+conducts and owns the room state; the host browser is the audio engine.
 
 ## Quick start
 

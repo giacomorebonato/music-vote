@@ -69,6 +69,7 @@ export async function startRoom(
 		data: {
 			roomId,
 			code,
+			stateDoc: doc as unknown as Prisma.InputJsonObject,
 			source: 'initial',
 			status: 'applied',
 			appliedAt: now,
@@ -78,8 +79,10 @@ export async function startRoom(
 		where: { id: roomId },
 		data: {
 			currentCode: code,
+			currentVersionId: version.id,
 			stateDoc: doc as unknown as Prisma.InputJsonObject,
 			status: 'live',
+			startedAt: now,
 		},
 	})
 	hub.publishHost(roomId, {
@@ -104,7 +107,13 @@ export async function startRoom(
 async function closeOpenPoll(roomId: string): Promise<void> {
 	await prisma.poll.updateMany({
 		where: { roomId, status: 'open' },
-		data: { status: 'closed', winningOption: null },
+		data: {
+			status: 'closed',
+			winningOption: null,
+			deliveryStatus: 'unchanged',
+			closedAt: new Date(),
+			resolvedAt: new Date(),
+		},
 	})
 }
 
@@ -228,7 +237,13 @@ export async function undoLastChange(
 
 	await prisma.room.update({
 		where: { id: roomId },
-		data: { currentCode: previous.code },
+		data: {
+			currentCode: previous.code,
+			currentVersionId: previous.id,
+			...(previous.stateDoc
+				? { stateDoc: previous.stateDoc as Prisma.InputJsonObject }
+				: {}),
+		},
 	})
 	hub.publishHost(roomId, {
 		type: 'code_update',
@@ -243,10 +258,23 @@ export async function skipPoll(roomId: string, hostId: string): Promise<void> {
 	if (!room || room.hostId !== hostId) {
 		throw new Error('Room not found or access denied')
 	}
-	await prisma.poll.updateMany({
+	const open = await prisma.poll.findFirst({
 		where: { roomId, status: 'open' },
-		data: { status: 'closed', winningOption: null },
 	})
+	if (!open) return
+	const updated = await prisma.poll.updateMany({
+		where: { id: open.id, status: 'open' },
+		data: {
+			status: 'closed',
+			winningOption: null,
+			deliveryStatus: 'skipped',
+			closedAt: new Date(),
+			resolvedAt: new Date(),
+		},
+	})
+	if (updated.count > 0) {
+		hub.publishAudience(roomId, { type: 'music_result', pollId: open.id })
+	}
 }
 
 export async function reportApplyResult(
@@ -264,28 +292,112 @@ export async function reportApplyResult(
 	const version = await prisma.patternVersion.findFirst({
 		where: { id: versionId, roomId },
 	})
+	if (version?.status === 'applied' && ok) return
+	if (version?.status === 'rejected' && !ok) return
 	if (version?.status !== 'candidate') {
 		throw new Error('Version not found or not a candidate')
 	}
+	const sourcePoll =
+		version.source === 'outro'
+			? null
+			: await prisma.poll.findUnique({ where: { id: version.source } })
+	if (ok && version.source !== 'outro') {
+		if (
+			(sourcePoll && sourcePoll.deliveryStatus !== 'preparing') ||
+			(version.baseVersionId &&
+				version.baseVersionId !== room.currentVersionId) ||
+			room.status !== 'live'
+		) {
+			const failed = await prisma.$transaction(async (tx) => {
+				const rejected = await tx.patternVersion.updateMany({
+					where: { id: versionId, status: 'candidate' },
+					data: { status: 'rejected' },
+				})
+				if (rejected.count === 0) return 0
+				const pollUpdated = await tx.poll.updateMany({
+					where: { id: version.source, deliveryStatus: 'preparing' },
+					data: { deliveryStatus: 'failed', resolvedAt: new Date() },
+				})
+				return pollUpdated.count
+			})
+			if (failed > 0) {
+				hub.publishAudience(roomId, {
+					type: 'music_result',
+					pollId: version.source,
+				})
+			}
+			throw new Error('Change is no longer current')
+		}
+	}
 
 	if (ok) {
-		await prisma.patternVersion.update({
-			where: { id: versionId },
-			data: { status: 'applied', appliedAt: new Date() },
+		const updated = await prisma.$transaction(async (tx) => {
+			const claimed = await tx.patternVersion.updateMany({
+				where: { id: versionId, status: 'candidate' },
+				data: { status: 'applied', appliedAt: new Date() },
+			})
+			if (claimed.count === 0) throw new Error('Change was already resolved')
+			const roomUpdated = await tx.room.updateMany({
+				where: {
+					id: roomId,
+					...(version.source !== 'outro' ? { status: 'live' } : {}),
+					...(version.baseVersionId
+						? { currentVersionId: version.baseVersionId }
+						: {}),
+				},
+				data: {
+					currentCode: version.code,
+					currentVersionId: version.id,
+					...(version.stateDoc
+						? { stateDoc: version.stateDoc as Prisma.InputJsonObject }
+						: {}),
+				},
+			})
+			if (roomUpdated.count === 0)
+				throw new Error('Change is no longer current')
+			if (version.source === 'outro') return 0
+			const pollUpdated = await tx.poll.updateMany({
+				where: { id: version.source, deliveryStatus: 'preparing' },
+				data: { deliveryStatus: 'applied', resolvedAt: new Date() },
+			})
+			if (sourcePoll && pollUpdated.count === 0) {
+				throw new Error('Change is no longer current')
+			}
+			return pollUpdated.count
 		})
-		await prisma.room.update({
-			where: { id: roomId },
-			data: { currentCode: version.code },
-		})
+		if (updated > 0) {
+			hub.publishAudience(roomId, {
+				type: 'music_result',
+				pollId: version.source,
+			})
+		}
 	} else {
-		await prisma.patternVersion.update({
-			where: { id: versionId },
-			data: { status: 'rejected' },
+		const rejection = await prisma.$transaction(async (tx) => {
+			const rejected = await tx.patternVersion.updateMany({
+				where: { id: versionId, status: 'candidate' },
+				data: { status: 'rejected' },
+			})
+			if (rejected.count === 0) return { rejected: false, pollUpdated: false }
+			if (version.source === 'outro')
+				return { rejected: true, pollUpdated: false }
+			const pollUpdated = await tx.poll.updateMany({
+				where: { id: version.source, deliveryStatus: 'preparing' },
+				data: { deliveryStatus: 'failed', resolvedAt: new Date() },
+			})
+			return { rejected: true, pollUpdated: pollUpdated.count > 0 }
 		})
-		hub.publishHost(roomId, {
-			type: 'pattern_rejected',
-			versionId,
-			error: error ?? 'rejected by host',
-		})
+		if (rejection.pollUpdated) {
+			hub.publishAudience(roomId, {
+				type: 'music_result',
+				pollId: version.source,
+			})
+		}
+		if (rejection.rejected) {
+			hub.publishHost(roomId, {
+				type: 'pattern_rejected',
+				versionId,
+				error: error ?? 'rejected by host',
+			})
+		}
 	}
 }

@@ -33,8 +33,10 @@ model Room {
   genre           String
   status          String
   currentCode     String?
+  currentVersionId String?
   stateDoc        Json
   createdAt       DateTime         @default(now())
+  startedAt       DateTime?
   polls           Poll[]
   patternVersions PatternVersion[]
 }
@@ -51,6 +53,9 @@ model Poll {
   closesAt      DateTime?
   status        String
   winningOption String?
+  deliveryStatus String?
+  closedAt      DateTime?
+  resolvedAt    DateTime?
   votes         Vote[]
 
   @@unique([roomId, seq])
@@ -71,7 +76,9 @@ model PatternVersion {
   roomId    String
   room      Room      @relation(fields: [roomId], references: [id], onDelete: Cascade)
   code      String
+  stateDoc  Json?
   source    String
+  baseVersionId String?
   status    String
   appliedAt DateTime?
 }

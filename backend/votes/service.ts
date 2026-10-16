@@ -83,8 +83,17 @@ export async function castVote(
 	}
 
 	try {
-		await prisma.vote.create({
-			data: { pollId, sessionToken: token, choice },
+		await prisma.$transaction(async (tx) => {
+			const current = await tx.poll.findUnique({ where: { id: pollId } })
+			if (
+				current?.status !== 'open' ||
+				(current.closesAt && current.closesAt.getTime() <= Date.now())
+			) {
+				throw new TRPCError({ code: 'BAD_REQUEST', message: 'Poll is closed' })
+			}
+			await tx.vote.create({
+				data: { pollId, sessionToken: token, choice },
+			})
 		})
 	} catch (error) {
 		if (

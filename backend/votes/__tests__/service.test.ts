@@ -282,7 +282,12 @@ test('currentPoll returns null poll with lobby roomStatus', async () => {
 
 	const result = await caller.currentPoll({ roomId: room.id })
 
-	expect(result).toEqual({ poll: null, roomStatus: 'lobby' })
+	expect(result).toEqual({
+		poll: null,
+		roomStatus: 'lobby',
+		choice: null,
+		latestResult: null,
+	})
 })
 
 test('currentPoll returns null poll with ended roomStatus', async () => {
@@ -291,7 +296,12 @@ test('currentPoll returns null poll with ended roomStatus', async () => {
 
 	const result = await caller.currentPoll({ roomId: room.id })
 
-	expect(result).toEqual({ poll: null, roomStatus: 'ended' })
+	expect(result).toEqual({
+		poll: null,
+		roomStatus: 'ended',
+		choice: null,
+		latestResult: null,
+	})
 })
 
 test('currentPoll returns the open poll with options and closesAt', async () => {
@@ -311,6 +321,61 @@ test('currentPoll returns the open poll with options and closesAt', async () => 
 			{ key: 'no', label: 'No' },
 		],
 		closesAt,
+	})
+})
+
+test('claimSession keeps an existing audience cookie', async () => {
+	const responseHeaders = new Headers()
+	const caller = votingRouter.createCaller(
+		callerCtx({
+			headers: { cookie: 'mv_session=returning-listener' },
+			resHeaders: responseHeaders,
+		}),
+	)
+	expect(await caller.claimSession()).toEqual({ token: 'returning-listener' })
+	expect(responseHeaders.get('set-cookie')).toBeNull()
+})
+
+test('audience snapshot restores the vote and latest confirmed result', async () => {
+	const room = await makeRoom()
+	const closed = await makePoll(room.id, {
+		status: 'closed',
+		winningOption: 'yes',
+	})
+	await prisma.poll.update({
+		where: { id: closed.id },
+		data: { openedAt: new Date(), deliveryStatus: 'applied' },
+	})
+	await prisma.vote.createMany({
+		data: [
+			{ pollId: closed.id, sessionToken: 'a', choice: 'yes' },
+			{ pollId: closed.id, sessionToken: 'b', choice: 'yes' },
+			{ pollId: closed.id, sessionToken: 'c', choice: 'no' },
+		],
+	})
+	await makePoll(room.id, { seq: 2, status: 'open' })
+	await prisma.vote.create({
+		data: {
+			pollId: (
+				await prisma.poll.findFirstOrThrow({
+					where: { roomId: room.id, seq: 2 },
+				})
+			).id,
+			sessionToken: 'a',
+			choice: 'no',
+		},
+	})
+	const caller = votingRouter.createCaller(
+		callerCtx({ headers: { cookie: 'mv_session=a' } }),
+	)
+	const snapshot = await caller.currentPoll({ roomId: room.id })
+	expect(snapshot.choice).toBe('no')
+	expect(snapshot.latestResult).toMatchObject({
+		id: closed.id,
+		winnerLabel: 'Yes',
+		winnerCount: 2,
+		total: 3,
+		status: 'applied',
 	})
 })
 
@@ -363,8 +428,22 @@ test('summary returns polls with winners, applied flags, and versions', async ()
 	const result = await caller.summary({ roomId: room.id })
 
 	expect(result.polls).toEqual([
-		{ question: 'More drums?', winningOption: 'yes', applied: true },
-		{ question: 'More drums?', winningOption: 'no', applied: false },
+		{
+			question: 'More drums?',
+			winningOption: 'yes',
+			winningLabel: 'Yes',
+			deliveryStatus: null,
+			applied: true,
+			reverted: false,
+		},
+		{
+			question: 'More drums?',
+			winningOption: 'no',
+			winningLabel: 'No',
+			deliveryStatus: null,
+			applied: false,
+			reverted: false,
+		},
 	])
 	expect(result.versions).toHaveLength(1)
 	expect(result.versions[0]).toEqual({

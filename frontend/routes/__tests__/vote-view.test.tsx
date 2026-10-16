@@ -76,6 +76,83 @@ test('live with no open poll shows the next-poll wait', () => {
 	expect(markup).toContain('Waiting for the next poll')
 })
 
+test('closed poll shows the majority and confirmed playback', () => {
+	const markup = renderToStaticMarkup(
+		<VoteView
+			{...baseProps}
+			roomStatus="live"
+			latestResult={{
+				id: 'poll-1',
+				question: 'Where next?',
+				winnerLabel: 'Deeper bass',
+				winnerCount: 7,
+				total: 10,
+				status: 'applied',
+			}}
+		/>,
+	)
+	expect(markup).toContain('Deeper bass wins — 70% of 10 votes cast')
+	expect(markup).toContain('The crowd’s choice is playing')
+})
+
+test('result keeps the upcoming vote time visible while people dance', () => {
+	const markup = renderToStaticMarkup(
+		<VoteView
+			{...baseProps}
+			roomStatus="live"
+			nowMs={Date.parse('2026-10-16T12:00:00.000Z')}
+			latestResult={{
+				id: 'poll-1',
+				question: 'Where next?',
+				winnerLabel: 'Deeper bass',
+				winnerCount: 7,
+				total: 10,
+				status: 'applied',
+				nextPollAt: '2026-10-16T12:00:45.000Z',
+			}}
+		/>,
+	)
+	expect(markup).toContain('Next vote in about 0:45')
+})
+
+test('tie keeps the groove without implying a change played', () => {
+	const markup = renderToStaticMarkup(
+		<VoteView
+			{...baseProps}
+			roomStatus="live"
+			latestResult={{
+				id: 'poll-1',
+				question: 'Where next?',
+				winnerLabel: null,
+				winnerCount: 0,
+				total: 10,
+				status: 'unchanged',
+			}}
+		/>,
+	)
+	expect(markup).toContain('No majority this round')
+	expect(markup).toContain('The groove continues')
+})
+
+test('a host skip is not described as a failed majority', () => {
+	const markup = renderToStaticMarkup(
+		<VoteView
+			{...baseProps}
+			roomStatus="live"
+			latestResult={{
+				id: 'poll-1',
+				question: 'Where next?',
+				winnerLabel: null,
+				winnerCount: 0,
+				total: 3,
+				status: 'skipped',
+			}}
+		/>,
+	)
+	expect(markup).toContain('DJ skipped this round')
+	expect(markup).not.toContain('No majority')
+})
+
 test('re-claims a failed session claim so a lost request does not brick voting', async () => {
 	const claim = mock((): Promise<unknown> =>
 		Promise.reject(new Error('network down')),

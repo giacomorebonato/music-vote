@@ -10,7 +10,18 @@ export type PollCardPoll = {
 export type SummaryPoll = {
 	question: string
 	winningOption: string | null
+	winningLabel?: string | null
+	deliveryStatus?: string | null
 	applied: boolean
+	reverted?: boolean
+}
+
+function summaryOutcome(poll: SummaryPoll): string | null {
+	if (poll.applied) return 'music changed'
+	if (poll.reverted) return 'later undone'
+	if (poll.deliveryStatus === 'unchanged') return 'groove stayed'
+	if (poll.deliveryStatus === 'failed') return 'change could not play'
+	return null
 }
 
 /** Seconds remaining rendered as `m:ss`, clamped at zero. */
@@ -23,8 +34,8 @@ export function formatCountdown(totalSeconds: number): string {
 
 /**
  * The single poll a phone shows at a time. Buttons are rendered from the
- * poll's own option keys — evolution polls use yes/no, the end poll uses
- * wrap/continue — so nothing here hardcodes option names.
+ * poll's own option keys — evolution polls use two generated choices, while
+ * the end poll uses wrap/continue — so nothing here hardcodes option names.
  *
  * Fully prop-driven: the parent owns the vote outcome, which keeps both the
  * pre-vote and voted states directly renderable in a static test.
@@ -78,7 +89,7 @@ export function PollCard({
 				</div>
 				{voted ? (
 					<div className="alert alert-success" data-testid="vote-counted">
-						<span>Vote counted</span>
+						<span>Vote counted. Back to dancing!</span>
 					</div>
 				) : null}
 			</div>
@@ -116,10 +127,12 @@ export function PollTimeline({ polls }: { polls: SummaryPoll[] }) {
 								<span className="font-medium">{poll.question}</span>
 								<div className="flex items-center gap-2">
 									<span className="badge badge-primary">
-										{poll.winningOption}
+										{poll.winningLabel ?? poll.winningOption}
 									</span>
-									{poll.applied ? (
-										<span className="text-xs opacity-70">music changed</span>
+									{summaryOutcome(poll) ? (
+										<span className="text-xs opacity-70">
+											{summaryOutcome(poll)}
+										</span>
 									) : null}
 								</div>
 							</div>

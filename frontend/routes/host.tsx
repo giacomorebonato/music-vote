@@ -89,6 +89,7 @@ function HostConsole({ roomId }: { roomId: string }) {
 	// Reconcile bookkeeping: candidate versionIds this page already tried to
 	// apply (see the missed-frame replay effect below).
 	const attemptedCandidateRef = useRef<Set<string>>(new Set())
+	const pendingAudioApplyRef = useRef<CodeUpdateEvent | null>(null)
 	const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 	// Monotonic badge tokens, and the token reserved by an Undo click so the
 	// undo's own `code_update` frame shares it (see `frontend/lib/apply-status`).
@@ -195,11 +196,18 @@ function HostConsole({ roomId }: { roomId: string }) {
 						// reconcile retry so a later refetch can confirm it.
 						attemptedCandidateRef.current.delete(event.versionId)
 						showToast(`Change not confirmed: ${error.message}`)
+						void refetchRoom().then(async ({ data }) => {
+							const confirmedCode = data?.room.currentCode
+							if (!confirmedCode) return
+							await playerRef.current?.applyPattern(confirmedCode)
+							appliedCodeRef.current = confirmedCode
+							setDisplayCode(confirmedCode)
+						})
 					},
 				},
 			)
 		},
-		[reportApplyResult, roomId, showToast],
+		[refetchRoom, reportApplyResult, roomId, showToast],
 	)
 
 	/**
@@ -249,7 +257,11 @@ function HostConsole({ roomId }: { roomId: string }) {
 							error: result.error,
 						})
 					}
-					reportApply(event, result)
+					if (result.ok && !result.audioRunning) {
+						pendingAudioApplyRef.current = event
+					} else {
+						reportApply(event, result)
+					}
 				})
 				.catch((error: unknown) => {
 					// applyPattern is not supposed to reject, but an unsettled apply
@@ -351,6 +363,10 @@ function HostConsole({ roomId }: { roomId: string }) {
 				if (pending && result) {
 					if (attemptedCandidateRef.current.has(pending.versionId)) return
 					attemptedCandidateRef.current.add(pending.versionId)
+					if (result.ok && !result.audioRunning) {
+						pendingAudioApplyRef.current = pending
+						return
+					}
 					reportApplyResult.mutate(
 						{
 							roomId,
@@ -384,7 +400,12 @@ function HostConsole({ roomId }: { roomId: string }) {
 		if (!audioBlocked) return
 		const unlock = (): void => {
 			void resumeAudio().then((running) => {
-				if (running) setAudioBlocked(false)
+				if (running) {
+					setAudioBlocked(false)
+					const pending = pendingAudioApplyRef.current
+					pendingAudioApplyRef.current = null
+					if (pending) reportApply(pending, { ok: true, audioRunning: true })
+				}
 			})
 		}
 		const types = ['pointerdown', 'keydown', 'touchstart'] as const
@@ -392,7 +413,7 @@ function HostConsole({ roomId }: { roomId: string }) {
 		return () => {
 			for (const type of types) window.removeEventListener(type, unlock)
 		}
-	}, [audioBlocked])
+	}, [audioBlocked, reportApply])
 
 	const { connected } = useRoomChannel(roomId, {
 		onEvent: handleEvent,

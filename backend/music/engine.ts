@@ -23,8 +23,8 @@ export class MusicGenError extends Error {
 const MAX_CODE_ATTEMPTS = 2
 const MAX_QUESTION_ATTEMPTS = 2
 const MAX_QUESTION_CHARS = 120
-const MAX_OPTION_CHARS = 60
-const MAX_OPTIONS = 4
+const MAX_OPTION_CHARS = 32
+const MAX_OPTIONS = 2
 export const FALLBACK_QUESTION = 'Where should the set go next?'
 export const FALLBACK_OPTIONS = ['more energy', 'deeper, darker groove']
 const INITIAL_QUESTION = 'start set'

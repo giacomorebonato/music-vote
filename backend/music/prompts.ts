@@ -130,10 +130,10 @@ export function buildQuestionPrompt(doc: StateDoc): string {
 		fewShotsBlock(),
 		'',
 		'Ask the audience to choose the next change to the music.',
-		'Output the question on the first line (max 120 characters), then at least two answer options, one per line, each starting with "- ".',
+		'Output the question on the first line (max 120 characters), then exactly two short answer options, one per line, each starting with "- ".',
 		'Every option must describe a DIFFERENT change to the pattern (energy, drums, bass, melody, harmony, sound design).',
 		'Never offer an option that keeps the music as it is: no "yes", "no", "keep it as is", "no change", "same" or "nothing" answers.',
-		'Max 60 characters per option, no prose, no markdown fences.',
+		'Max 32 characters per option, no prose, no markdown fences.',
 		'Never repeat a dimension already polled, never ask about code or technical terms, and pace the evolution: do not stack another melody or a third layer right after one was added.',
 	].join('\n')
 }

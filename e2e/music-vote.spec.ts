@@ -124,9 +124,11 @@ test('host runs a set that the audience votes through, undoes, and ends', async 
 	await host.goto('/create')
 	// Schema minimums: 5 min / 5s / 15s (FAST only shrinks the poll open window).
 	await host.getByLabel('Length in minutes (5–60)').fill('5')
-	await host.getByLabel('Poll interval in seconds (5–600)').fill('60')
+	await host
+		.getByLabel('Dance time between rounds in seconds (5–600)')
+		.fill('60')
 	// Exercise the per-room open-window field; FAST still forces 5s at runtime.
-	await host.getByLabel('Poll open window in seconds (15–600)').fill('15')
+	await host.getByLabel('Time to vote in seconds (15–600)').fill('15')
 	await host.getByTestId('create-room').click()
 	await expect(host).toHaveURL(/\/r\/[^/]+\/host/)
 	await expect(host.getByTestId('room-status')).toHaveText('lobby')
@@ -157,6 +159,9 @@ test('host runs a set that the audience votes through, undoes, and ends', async 
 	// assumes how many there are or what they say.
 	await expect(phoneA.getByTestId('poll-question')).toHaveText(FIRST_QUESTION)
 	const { testId: optionTestId, key: optionKey } = await firstOption(phoneA)
+	const optionLabel = (
+		await phoneA.getByTestId(optionTestId).innerText()
+	).trim()
 
 	await expect
 		.poll(() => audioStarts(host), { timeout: 30_000 })
@@ -167,10 +172,8 @@ test('host runs a set that the audience votes through, undoes, and ends', async 
 	await expect(phoneA.getByTestId('vote-counted')).toBeVisible()
 	const phoneAToken = await sessionToken(phoneAContext)
 
-	// Phone B votes while phone A reloads. The reload re-mints `mv_session`
-	// (known backend gap: a fresh token would be allowed a second vote), so the
-	// phone's ORIGINAL token is restored from the jar before the duplicate tap.
-	// That is what makes the retry a real duplicate of the same poll.
+	// Phone B votes while phone A reloads. The anonymous cookie and recorded
+	// choice survive the reload, so A cannot submit a second vote.
 	await Promise.all([
 		(async (): Promise<void> => {
 			await phoneB.getByTestId(optionTestId).click()
@@ -181,22 +184,12 @@ test('host runs a set that the audience votes through, undoes, and ends', async 
 			await expect(phoneA.getByTestId('poll-card')).toBeVisible({
 				timeout: 10_000,
 			})
-			// Wait for the mount claim to finish re-minting the cookie, then put the
-			// original token back so the next tap is a genuine duplicate.
-			await expect.poll(() => sessionToken(phoneAContext)).not.toBe(phoneAToken)
-			await phoneAContext.addCookies([
-				{
-					name: 'mv_session',
-					value: phoneAToken,
-					domain: 'localhost',
-					path: '/',
-				},
-			])
+			await expect.poll(() => sessionToken(phoneAContext)).toBe(phoneAToken)
+			await expect(phoneA.getByTestId(optionTestId)).toBeDisabled()
 		})(),
 	])
 
-	await phoneA.getByTestId(optionTestId).click()
-	// Duplicate vote renders the counted state, never an error alert.
+	// The recorded vote remains visible after a reload, without a duplicate.
 	await expect(phoneA.getByTestId('vote-counted')).toBeVisible({
 		timeout: POLL_OPEN_WINDOW_MS,
 	})
@@ -231,6 +224,9 @@ test('host runs a set that the audience votes through, undoes, and ends', async 
 		FIRST_QUESTION,
 	)
 	const secondPollOption = await firstOption(phoneA)
+	const secondOptionLabel = (
+		await phoneA.getByTestId(secondPollOption.testId).innerText()
+	).trim()
 	await phoneA.getByTestId(secondPollOption.testId).click()
 	await expect(phoneA.getByTestId('vote-counted')).toBeVisible()
 
@@ -297,13 +293,16 @@ test('host runs a set that the audience votes through, undoes, and ends', async 
 	expect(otherItems).toHaveLength(1)
 	// Each decided poll shows that poll's OWN winning option key; the fallback
 	// second question offers different change options, so the keys never collide.
-	expect(itemTexts.filter((text) => text.includes(optionKey))).toHaveLength(1)
+	expect(itemTexts.filter((text) => text.includes(optionLabel))).toHaveLength(1)
 	expect(
-		itemTexts.filter((text) => text.includes(secondPollOption.key)),
+		itemTexts.filter((text) => text.includes(secondOptionLabel)),
 	).toHaveLength(1)
-	for (const text of itemTexts) {
-		expect(text).toContain('music changed')
-	}
+	expect(
+		itemTexts.filter((text) => text.includes('music changed')),
+	).toHaveLength(1)
+	expect(
+		itemTexts.filter((text) => text.includes('later undone')),
+	).toHaveLength(1)
 
 	await expect(phoneA.getByTestId('poll-timeline')).toBeVisible({
 		timeout: 30_000,

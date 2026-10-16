@@ -29,6 +29,11 @@ export type RoomEndedEvent = {
 	type: 'room_ended'
 }
 
+type MusicResultEvent = {
+	type: 'music_result'
+	pollId: string
+}
+
 /** @public */
 export type CodeUpdateEvent = {
 	type: 'code_update'
@@ -68,6 +73,7 @@ export type WsEvent =
 	| PollOpenedEvent
 	| PollClosedEvent
 	| RoomEndedEvent
+	| MusicResultEvent
 	| CodeUpdateEvent
 	| VoteCountEvent
 	| RoomStatusEvent

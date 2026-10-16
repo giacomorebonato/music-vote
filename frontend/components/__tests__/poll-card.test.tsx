@@ -86,3 +86,22 @@ test('ended timeline lists only decided polls', () => {
 	expect(markup).toContain('continue')
 	expect(markup).not.toContain('Zero votes?')
 })
+
+test('set timeline uses listener-facing labels and distinguishes a hold', () => {
+	const markup = renderToStaticMarkup(
+		<PollTimeline
+			polls={[
+				{
+					question: 'Stay here?',
+					winningOption: 'stay-here',
+					winningLabel: 'Stay here',
+					deliveryStatus: 'unchanged',
+					applied: false,
+				},
+			]}
+		/>,
+	)
+	expect(markup).toContain('Stay here')
+	expect(markup).toContain('groove stayed')
+	expect(markup).not.toContain('stay-here')
+})

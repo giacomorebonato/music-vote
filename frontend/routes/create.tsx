@@ -26,7 +26,7 @@ export function CreateRoute() {
 			bpm: 120,
 			lengthMin: 10,
 			pollIntervalSec: 60,
-			pollOpenSec: 45,
+			pollOpenSec: 20,
 		},
 		validators: { onChange: createRoomSchema },
 		onSubmit: ({ value }) => {
@@ -130,7 +130,7 @@ export function CreateRoute() {
 						{(field) => (
 							<label className="form-control flex flex-col gap-1">
 								<span className="label-text">
-									Poll interval in seconds (5–600)
+									Dance time between rounds in seconds (5–600)
 								</span>
 								<input
 									className="input input-bordered w-full"
@@ -152,7 +152,7 @@ export function CreateRoute() {
 						{(field) => (
 							<label className="form-control flex flex-col gap-1">
 								<span className="label-text">
-									Poll open window in seconds (15–600)
+									Time to vote in seconds (15–600)
 								</span>
 								<input
 									className="input input-bordered w-full"
@@ -167,7 +167,7 @@ export function CreateRoute() {
 									}
 								/>
 								<span className="text-xs opacity-60">
-									Countdown the audience sees after voting.
+									Countdown while the crowd chooses.
 								</span>
 							</label>
 						)}
@@ -182,7 +182,8 @@ export function CreateRoute() {
 						{([intervalSec, openSec]) =>
 							Number.isFinite(intervalSec) && Number.isFinite(openSec) ? (
 								<p className="text-xs opacity-60" data-testid="cycle-estimate">
-									≈ one vote cycle every {intervalSec + openSec}s
+									≈ {intervalSec}s to dance after each result, then {openSec}s
+									to vote
 								</p>
 							) : null
 						}

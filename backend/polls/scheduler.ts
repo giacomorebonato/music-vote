@@ -21,13 +21,13 @@ import type { Prisma, Room } from '../../prisma/generated/client'
  * interval DOWN to at most <s> seconds (regardless of the schema minimum),
  * so poll results land ~ every <s> + open-window seconds. Setting
  * MV_TEST_POLL_OPEN_SECS=<s> overrides the per-room poll open window (the
- * create-room form default is 45s), for example `MV_TEST_POLL_OPEN_SECS=10 bun
+ * create-room form default is 20s), for example `MV_TEST_POLL_OPEN_SECS=10 bun
  * run dev` gives a 10s countdown after voting in every room. Dev-only: unset
  * env leaves per-room timings untouched, and MV_E2E_FAST keeps precedence
  * (its 5s window must stay stable for E2E).
  */
 
-const DEFAULT_POLL_OPEN_SECS = 45
+const DEFAULT_POLL_OPEN_SECS = 20
 const MIN_INTERVAL_SECS = process.env.MV_E2E_FAST === '1' ? 10 : 0
 
 function parseTestInterval(): number | null {
@@ -43,7 +43,7 @@ function parseTestPollOpenSecs(): number | null {
 /**
  * Poll open window in ms. Fast mode hard-codes the 5s window; otherwise the
  * dev-only MV_TEST_POLL_OPEN_SECS override wins, defaulting to the per-room
- * `pollOpenSec` (create-room field, 45s default).
+ * `pollOpenSec` (create-room field, 20s default).
  */
 export function pollOpenMs(roomPollOpenSec = DEFAULT_POLL_OPEN_SECS): number {
 	if (process.env.MV_E2E_FAST === '1') return 5_000
@@ -69,6 +69,14 @@ function tickIntervalMSec(pollIntervalSec: number): number {
 	return Math.max(roomIntervalSec(pollIntervalSec), MIN_INTERVAL_SECS) * 1000
 }
 
+/** Check readiness frequently; the configured interval is the rest duration. */
+function maintenanceTickMs(pollIntervalSec: number): number {
+	const intervalMs = tickIntervalMSec(pollIntervalSec)
+	return process.env.MV_E2E_FAST === '1'
+		? intervalMs
+		: Math.min(intervalMs, 5000)
+}
+
 export type SchedulerClock = {
 	now(): number
 	setTimeout(callback: () => void | Promise<void>, ms: number): unknown
@@ -91,6 +99,7 @@ export function setSchedulerClock(next: SchedulerClock): void {
 type PollOption = {
 	key: string
 	label: string
+	intent?: 'hold' | 'change'
 }
 
 type RoomScheduler = {
@@ -164,7 +173,8 @@ async function armLive(room: Room): Promise<void> {
 	if (!scheduler) return
 
 	const now = clock.now()
-	const endAt = room.createdAt.getTime() + room.lengthSec * 1000
+	const endAt =
+		(room.startedAt ?? room.createdAt).getTime() + room.lengthSec * 1000
 	if (endAt <= now) {
 		await triggerEndRoom(room.id, room.hostId)
 		disarmScheduler(room.id)
@@ -175,7 +185,9 @@ async function armLive(room: Room): Promise<void> {
 		await endRoomAndDisarm(room.id, room.hostId)
 	}, endAt - now)
 
-	const insertAt = room.createdAt.getTime() + Math.floor(room.lengthSec * 750)
+	const insertAt =
+		(room.startedAt ?? room.createdAt).getTime() +
+		Math.floor(room.lengthSec * 750)
 	if (insertAt <= now) {
 		await ensureEndPoll(room.id)
 		await openNextQueuedPoll(room.id)
@@ -185,10 +197,10 @@ async function armLive(room: Room): Promise<void> {
 		}, insertAt - now)
 	}
 
-	const intervalMs = tickIntervalMSec(room.pollIntervalSec)
+	const tickMs = maintenanceTickMs(room.pollIntervalSec)
 	scheduler.intervalHandle = clock.setTimeout(async () => {
-		await liveTick(room.id, intervalMs)
-	}, intervalMs)
+		await liveTick(room.id, tickMs)
+	}, tickMs)
 
 	await openNextQueuedPoll(room.id)
 	await armExistingPollClose(room.id)
@@ -214,7 +226,7 @@ async function armExistingPollClose(roomId: string): Promise<void> {
 	}, remaining)
 }
 
-async function liveTick(roomId: string, intervalMs: number): Promise<void> {
+async function liveTick(roomId: string, tickMs: number): Promise<void> {
 	const scheduler = active.get(roomId)
 	if (!scheduler) return
 	scheduler.intervalHandle = undefined
@@ -226,7 +238,10 @@ async function liveTick(roomId: string, intervalMs: number): Promise<void> {
 	}
 
 	const now = clock.now()
-	if (now >= room.createdAt.getTime() + room.lengthSec * 1000) {
+	if (
+		now >=
+		(room.startedAt ?? room.createdAt).getTime() + room.lengthSec * 1000
+	) {
 		await triggerEndRoom(roomId, room.hostId)
 		disarmScheduler(roomId)
 		return
@@ -238,8 +253,8 @@ async function liveTick(roomId: string, intervalMs: number): Promise<void> {
 		console.error(`Poll tick maintenance failed in room ${roomId}`, error)
 	}
 	scheduler.intervalHandle = clock.setTimeout(async () => {
-		await liveTick(roomId, intervalMs)
-	}, intervalMs)
+		await liveTick(roomId, tickMs)
+	}, tickMs)
 }
 
 /**
@@ -273,6 +288,15 @@ async function healPollChain(
 		where: { roomId, status: 'queued' },
 	})
 	if (queuedPoll) return
+	const latestClosed = await prisma.poll.findFirst({
+		where: { roomId, kind: 'evolution', status: 'closed' },
+		orderBy: { seq: 'desc' },
+	})
+	if (
+		latestClosed?.deliveryStatus === 'preparing' &&
+		process.env.MV_E2E_FAST !== '1'
+	)
+		return
 	try {
 		await queueNextEvolution(roomId, room)
 	} catch (error) {
@@ -366,11 +390,49 @@ async function openNextQueuedPoll(roomId: string): Promise<void> {
 		select: { pollOpenSec: true },
 	})
 
-	const queued = await prisma.poll.findFirst({
+	let queued = await prisma.poll.findFirst({
 		where: { roomId, status: 'queued' },
 		orderBy: { seq: 'asc' },
 	})
 	if (!queued) return
+	const endPoll = await prisma.poll.findFirst({
+		where: { roomId, kind: 'end', status: 'queued' },
+	})
+	if (endPoll && queued.kind === 'evolution') {
+		await prisma.poll.update({
+			where: { id: queued.id },
+			data: {
+				status: 'closed',
+				deliveryStatus: 'unchanged',
+				closedAt: new Date(clock.now()),
+				resolvedAt: new Date(clock.now()),
+			},
+		})
+		queued = endPoll
+	}
+	if (queued.kind === 'evolution' && process.env.MV_E2E_FAST !== '1') {
+		const lastClosed = await prisma.poll.findFirst({
+			where: { roomId, kind: 'evolution', status: 'closed' },
+			orderBy: { seq: 'desc' },
+		})
+		if (lastClosed) {
+			if (lastClosed.deliveryStatus === 'preparing') {
+				if (
+					lastClosed.closedAt &&
+					clock.now() - lastClosed.closedAt.getTime() >= 30_000
+				) {
+					await markFailed(lastClosed.id, roomId)
+				} else return
+			}
+			const roomInterval = roomIntervalSec(
+				(await prisma.room.findUnique({ where: { id: roomId } }))
+					?.pollIntervalSec ?? 60,
+			)
+			const restUntil =
+				(lastClosed.resolvedAt ?? lastClosed.closedAt)?.getTime() ?? 0
+			if (clock.now() < restUntil + roomInterval * 1000) return
+		}
+	}
 
 	const now = new Date(clock.now())
 	const openMs = pollOpenMs(room?.pollOpenSec)
@@ -409,7 +471,6 @@ async function openNextQueuedPoll(roomId: string): Promise<void> {
 async function closePoll(pollId: string, roomId: string): Promise<void> {
 	const poll = await prisma.poll.findUnique({
 		where: { id: pollId },
-		include: { votes: true },
 	})
 	if (poll?.status !== 'open') return
 
@@ -420,11 +481,30 @@ async function closePoll(pollId: string, roomId: string): Promise<void> {
 	if (scheduler) scheduler.pollCloseHandle = undefined
 
 	const options = parseOptions(poll.options)
-	const winner = pickWinner(options, poll.votes, poll.id)
-	await prisma.poll.update({
-		where: { id: pollId },
-		data: { status: 'closed', winningOption: winner },
+	const outcome = await prisma.$transaction(async (tx) => {
+		const claimed = await tx.poll.updateMany({
+			where: { id: pollId, status: 'open' },
+			data: { status: 'closed' },
+		})
+		if (claimed.count === 0) return null
+		const votes = await tx.vote.findMany({ where: { pollId } })
+		const winner = pickWinner(options, votes)
+		const hold =
+			options.find((option) => option.key === winner)?.intent === 'hold'
+		const needsMusic = winner !== null && !hold && poll.kind === 'evolution'
+		await tx.poll.update({
+			where: { id: pollId },
+			data: {
+				winningOption: winner,
+				deliveryStatus: needsMusic ? 'preparing' : 'unchanged',
+				closedAt: new Date(clock.now()),
+				resolvedAt: needsMusic ? null : new Date(clock.now()),
+			},
+		})
+		return { winner, hold, needsMusic }
 	})
+	if (!outcome) return
+	const { winner, hold, needsMusic } = outcome
 
 	const closed: WsEvent = {
 		type: 'poll_closed',
@@ -434,9 +514,13 @@ async function closePoll(pollId: string, roomId: string): Promise<void> {
 	hub.publishAudience(roomId, closed)
 	hub.publishHost(roomId, closed)
 
-	if (winner) await applyPollOutcome(roomId, room, poll, options, winner)
+	if (winner && !hold)
+		await applyPollOutcome(roomId, room, poll, options, winner)
 
-	if (poll.kind === 'evolution') {
+	if (
+		poll.kind === 'evolution' &&
+		(!needsMusic || process.env.MV_E2E_FAST === '1')
+	) {
 		await queueNextEvolutionAfterClose(roomId, room)
 	}
 }
@@ -468,7 +552,20 @@ async function applyPollOutcome(
 			type: 'warning',
 			message: 'Evolution poll failed; music unchanged',
 		})
+		if (poll.kind === 'evolution') await markFailed(poll.id, roomId)
 	}
+}
+
+async function markFailed(pollId: string, roomId: string): Promise<void> {
+	await prisma.patternVersion.updateMany({
+		where: { source: pollId, status: 'candidate' },
+		data: { status: 'rejected' },
+	})
+	await prisma.poll.update({
+		where: { id: pollId },
+		data: { deliveryStatus: 'failed', resolvedAt: new Date(clock.now()) },
+	})
+	hub.publishAudience(roomId, { type: 'music_result', pollId })
 }
 
 async function applyEndPollOutcome(
@@ -499,12 +596,14 @@ function shouldQueueNextEvolution(
 	opts?: { afterContinue?: boolean },
 ): boolean {
 	const now = clock.now()
-	const insertAt = room.createdAt.getTime() + room.lengthSec * 750
+	const insertAt =
+		(room.startedAt ?? room.createdAt).getTime() + room.lengthSec * 750
 	const intervalMs = tickIntervalMSec(room.pollIntervalSec)
 
 	const scheduler = active.get(roomId)
 	if (scheduler?.continuing) {
-		const endAt = room.createdAt.getTime() + room.lengthSec * 1000
+		const endAt =
+			(room.startedAt ?? room.createdAt).getTime() + room.lengthSec * 1000
 		return now + intervalMs < endAt
 	}
 	if (opts?.afterContinue) return true
@@ -542,8 +641,18 @@ async function runEvolution(
 		doc,
 		poll.question,
 		winner,
-		room.currentCode ?? '',
+		fresh?.currentCode ?? room.currentCode ?? '',
 	)
+	const stillOpen = await prisma.poll.findUnique({ where: { id: poll.id } })
+	if (stillOpen?.deliveryStatus !== 'preparing') return
+	const latestRoom = await prisma.room.findUnique({ where: { id: room.id } })
+	if (
+		latestRoom?.status !== 'live' ||
+		latestRoom.currentVersionId !== fresh?.currentVersionId
+	) {
+		await markFailed(poll.id, room.id)
+		return
+	}
 
 	if (!result || !compileCheck(result.code).ok) {
 		console.info(`Poll ${poll.id} no change`)
@@ -551,7 +660,7 @@ async function runEvolution(
 			type: 'warning',
 			message: 'Evolution generation failed; music unchanged',
 		})
-		await updateRoomDoc(room, poll.question, winner, null)
+		await markFailed(poll.id, room.id)
 		return
 	}
 
@@ -559,37 +668,22 @@ async function runEvolution(
 		data: {
 			roomId: room.id,
 			code: result.code,
+			stateDoc: applyChange(
+				doc,
+				poll.question,
+				winner,
+				result.changeSummary,
+			) as unknown as Prisma.InputJsonObject,
+			baseVersionId: fresh?.currentVersionId,
 			source: poll.id,
 			status: 'candidate',
 		},
 	})
-	await updateRoomDoc(room, poll.question, winner, result.changeSummary)
 	hub.publishHost(room.id, {
 		type: 'code_update',
 		code: result.code,
 		versionId: version.id,
 		kind: 'evolution',
-	})
-}
-
-async function updateRoomDoc(
-	room: Room,
-	question: string,
-	winner: string,
-	changeSummary: string | null,
-): Promise<void> {
-	// Read-modify-write on a FRESH stateDoc: the Room row passed in was read
-	// before a seconds-long LLM call, and a concurrent closePoll may have
-	// appended its own history entry meanwhile. Writing the stale snapshot
-	// would clobber that entry (lost update) and corrupt the MC's memory.
-	const fresh = await prisma.room.findUnique({ where: { id: room.id } })
-	const base =
-		(fresh?.stateDoc as unknown as StateDoc | undefined) ??
-		(room.stateDoc as unknown as StateDoc)
-	const next = applyChange(base, question, winner, changeSummary)
-	await prisma.room.update({
-		where: { id: room.id },
-		data: { stateDoc: next as unknown as Prisma.InputJsonObject },
 	})
 }
 
@@ -623,13 +717,20 @@ async function queueNextEvolution(
 		(fresh?.stateDoc as unknown as StateDoc | undefined) ??
 		(room.stateDoc as unknown as StateDoc)
 	const generated = await generateNextQuestion(provider, doc)
+	const options =
+		seq % 4 === 0
+			? [
+					{ key: 'stay-here', label: 'Stay here', intent: 'hold' },
+					{ ...toPollOptions([generated.options[0]])[0], intent: 'change' },
+				]
+			: toPollOptions(generated.options)
 	await prisma.poll.create({
 		data: {
 			roomId,
 			seq,
 			kind: 'evolution',
 			question: generated.question,
-			options: toPollOptions(generated.options),
+			options,
 			status: 'queued',
 		},
 	})
@@ -656,7 +757,13 @@ export async function restoreSchedulers(): Promise<void> {
 		if (overdue) {
 			await prisma.poll.update({
 				where: { id: overdue.id },
-				data: { status: 'closed', winningOption: null },
+				data: {
+					status: 'closed',
+					winningOption: null,
+					deliveryStatus: 'unchanged',
+					closedAt: new Date(now),
+					resolvedAt: new Date(now),
+				},
 			})
 			const closed: WsEvent = {
 				type: 'poll_closed',
@@ -716,44 +823,15 @@ function tallyVotes(
 	return counts
 }
 
-function pickWinner(
+export function pickWinner(
 	options: PollOption[],
 	votes: { choice: string }[],
-	pollId: string,
 ): string | null {
 	const counts = tallyVotes(votes, options)
-	let max = -1
-	for (const count of counts.values()) {
-		if (count > max) max = count
-	}
-	if (max <= 0) return null
-	const tied = options.filter((option) => counts.get(option.key) === max)
-	if (tied.length === 1) return tied[0].key
-	const seed = hashStringToSeed(pollId)
-	console.info(`tie-break seed=${seed} for poll ${pollId}`)
-	return tied[seededRandomInt(seed, tied.length)].key
-}
-
-function hashStringToSeed(input: string): number {
-	let hash = 0
-	for (let i = 0; i < input.length; i++) {
-		const char = input.charCodeAt(i)
-		hash = (hash * 31 + char) >>> 0
-	}
-	return hash === 0 ? 1 : hash
-}
-
-function mulberry32(seed: number): () => number {
-	let state = seed
-	return () => {
-		state = (state + 0x6d2b79f5) >>> 0
-		let t = state
-		t = Math.imul(t ^ (t >>> 15), t | 1)
-		t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-	}
-}
-
-function seededRandomInt(seed: number, max: number): number {
-	return Math.floor(mulberry32(seed)() * max)
+	const total = [...counts.values()].reduce((sum, count) => sum + count, 0)
+	if (total === 0) return null
+	return (
+		options.find((option) => (counts.get(option.key) ?? 0) > total / 2)?.key ??
+		null
+	)
 }

@@ -1,0 +1,3 @@
+ALTER TABLE "Room" ADD COLUMN "startedAt" DATETIME;
+ALTER TABLE "Poll" ADD COLUMN "deliveryStatus" TEXT;
+ALTER TABLE "Poll" ADD COLUMN "closedAt" DATETIME;

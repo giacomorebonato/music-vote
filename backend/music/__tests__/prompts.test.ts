@@ -118,11 +118,11 @@ test('outro prompt carries current code and the code-only rule', () => {
 	expect(prompt).toContain('techno')
 })
 
-test('question prompt: a question plus at least two change options, no repeats, paced', () => {
+test('question prompt: a question plus two change options, no repeats, paced', () => {
 	const doc = votedDoc()
 	const prompt = buildQuestionPrompt(doc)
 
-	expect(prompt).toContain('at least two answer options')
+	expect(prompt).toContain('exactly two short answer options')
 	expect(prompt).toContain('first line')
 	expect(prompt).toContain('keep it as is')
 	expect(prompt).toContain('120')

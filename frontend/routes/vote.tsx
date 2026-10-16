@@ -1,5 +1,9 @@
 import type { PollCardPoll, SummaryPoll } from '@frontend/components/poll-card'
-import { PollCard, PollTimeline } from '@frontend/components/poll-card'
+import {
+	formatCountdown,
+	PollCard,
+	PollTimeline,
+} from '@frontend/components/poll-card'
 import { useRoomChannel } from '@frontend/lib/room-ws'
 import { useTRPC } from '@frontend/lib/trpc'
 import type { WsEvent } from '@shared/realtime/events'
@@ -8,6 +12,16 @@ import type { ReactNode } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 type VoteSelection = { pollId: string; choice: string | null }
+
+type LatestResult = {
+	id: string
+	question: string
+	winnerLabel: string | null
+	winnerCount: number
+	total: number
+	status: string
+	nextPollAt?: string | null
+}
 
 export type VoteClaimController = {
 	/**
@@ -60,6 +74,8 @@ type VoteViewProps = {
 	error: string | null
 	loadError: string | null
 	summaryPolls: SummaryPoll[] | null
+	latestResult?: LatestResult | null
+	nowMs?: number
 	onVote: (choice: string) => void
 }
 
@@ -70,6 +86,7 @@ export function VoteRoute({ roomId }: { roomId: string }) {
 	const refetchPoll = pollQuery.refetch
 	const roomStatus = pollQuery.data?.roomStatus ?? null
 	const poll = pollQuery.data?.poll ?? null
+	const latestResult = pollQuery.data?.latestResult ?? null
 	const ended = roomStatus === 'ended'
 
 	const summaryQuery = useQuery({
@@ -94,8 +111,11 @@ export function VoteRoute({ roomId }: { roomId: string }) {
 	// awaits the same controller so a fast tap cannot outrun the cookie, and a
 	// failed claim is retried on the next vote instead of bricking the page.
 	useEffect(() => {
-		void claimController.ensure().catch(() => undefined)
-	}, [claimController])
+		void claimController
+			.ensure()
+			.then(() => void refetchPoll())
+			.catch(() => undefined)
+	}, [claimController, refetchPoll])
 
 	// One ticker drives every countdown; cleared on unmount so navigating away
 	// cannot leak an interval.
@@ -117,6 +137,7 @@ export function VoteRoute({ roomId }: { roomId: string }) {
 				case 'poll_opened':
 				case 'poll_closed':
 				case 'room_ended':
+				case 'music_result':
 					reconcile()
 					break
 				default:
@@ -129,6 +150,14 @@ export function VoteRoute({ roomId }: { roomId: string }) {
 	// A reconnect may have missed poll lifecycle while the socket was down, so
 	// resync unconditionally.
 	useRoomChannel(roomId, { onEvent: handleEvent, onReconnect: reconcile })
+
+	useEffect(() => {
+		const onVisible = (): void => {
+			if (document.visibilityState === 'visible') reconcile()
+		}
+		document.addEventListener('visibilitychange', onVisible)
+		return () => document.removeEventListener('visibilitychange', onVisible)
+	}, [reconcile])
 
 	const closesAtMs = poll?.closesAt ? Date.parse(poll.closesAt) : null
 	const hasDeadline = closesAtMs !== null && !Number.isNaN(closesAtMs)
@@ -178,10 +207,13 @@ export function VoteRoute({ roomId }: { roomId: string }) {
 		[activePoll, castVote, claimController, reconcile],
 	)
 
-	const selectionForPoll =
-		selection && activePoll && selection.pollId === activePoll.id
-			? selection
-			: null
+	let selectionForPoll: VoteSelection | null = null
+	if (activePoll && pollQuery.data?.choice) {
+		selectionForPoll = { pollId: activePoll.id, choice: pollQuery.data.choice }
+	}
+	if (selection && activePoll && selection.pollId === activePoll.id) {
+		selectionForPoll = selection
+	}
 	const countdownSeconds = hasDeadline
 		? Math.max(0, Math.ceil((closesAtMs - nowMs) / 1000))
 		: null
@@ -200,6 +232,8 @@ export function VoteRoute({ roomId }: { roomId: string }) {
 					? (summaryQuery.data?.polls ?? [])
 					: null
 			}
+			latestResult={latestResult}
+			nowMs={nowMs}
 			onVote={(choice) => {
 				void handleVote(choice)
 			}}
@@ -220,6 +254,8 @@ export function VoteView({
 	error,
 	loadError,
 	summaryPolls,
+	latestResult = null,
+	nowMs = Date.now(),
 	onVote,
 }: VoteViewProps) {
 	let body: ReactNode
@@ -264,7 +300,9 @@ export function VoteView({
 			/>
 		)
 	} else {
-		body = (
+		body = latestResult ? (
+			<ResultStage result={latestResult} nowMs={nowMs} />
+		) : (
 			<WaitingStage
 				testId="waiting-poll"
 				title="Waiting for the next poll"
@@ -289,6 +327,53 @@ export function VoteView({
 				</div>
 			) : null}
 			{body}
+		</div>
+	)
+}
+
+function ResultStage({
+	result,
+	nowMs,
+}: {
+	result: LatestResult
+	nowMs: number
+}) {
+	const percent =
+		result.total === 0
+			? 0
+			: Math.round((result.winnerCount / result.total) * 100)
+	let title =
+		result.total === 0 ? 'No votes this round' : 'No majority this round'
+	if (result.status === 'skipped') title = 'DJ skipped this round'
+	if (result.winnerLabel) {
+		title = `${result.winnerLabel} wins — ${percent}% of ${result.total} votes cast`
+	}
+	let detail = 'The groove continues. Keep dancing!'
+	if (result.status === 'applied')
+		detail = 'The crowd’s choice is playing. Back to dancing!'
+	if (result.status === 'failed')
+		detail = 'That change could not play. The groove continues.'
+	if (result.status === 'preparing')
+		detail = 'Getting the crowd’s choice ready. Keep dancing!'
+	const nextInSeconds = result.nextPollAt
+		? Math.max(0, Math.ceil((Date.parse(result.nextPollAt) - nowMs) / 1000))
+		: null
+	return (
+		<div
+			className="card bg-base-100 shadow-xl"
+			data-testid="latest-result"
+			aria-live="polite"
+		>
+			<div className="card-body gap-3 text-center">
+				<span className="eyebrow">crowd decision</span>
+				<h2 className="font-bold text-xl">{title}</h2>
+				<p className="opacity-70">{detail}</p>
+				{nextInSeconds !== null && nextInSeconds > 0 ? (
+					<p className="text-sm opacity-70">
+						Next vote in about {formatCountdown(nextInSeconds)}
+					</p>
+				) : null}
+			</div>
 		</div>
 	)
 }

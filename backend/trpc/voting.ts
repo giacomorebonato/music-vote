@@ -17,6 +17,8 @@ const SESSION_MAX_AGE_SECS = 60 * 60 * 24
  */
 export const votingRouter = t.router({
 	claimSession: t.procedure.mutation(({ ctx }) => {
+		const existing = readSessionToken(ctx.req.headers.get('cookie'))
+		if (existing) return { token: existing }
 		const { token } = claimSession()
 		// fetchRequestHandler captures this Headers object as the response
 		// header sink, so the cookie set here lands on the tRPC response.
@@ -41,9 +43,63 @@ export const votingRouter = t.router({
 				where: { roomId: input.roomId, status: 'open' },
 				orderBy: { seq: 'desc' },
 			})
+			const latest = await ctx.prisma.poll.findFirst({
+				where: {
+					roomId: input.roomId,
+					status: 'closed',
+					openedAt: { not: null },
+				},
+				orderBy: { seq: 'desc' },
+				include: { votes: true },
+			})
+			const queued = await ctx.prisma.poll.findFirst({
+				where: { roomId: input.roomId, status: 'queued' },
+				orderBy: { seq: 'asc' },
+			})
+			const sessionToken = readSessionToken(ctx.req.headers.get('cookie'))
+			const choice =
+				poll && sessionToken
+					? ((
+							await ctx.prisma.vote.findFirst({
+								where: { pollId: poll.id, sessionToken },
+							})
+						)?.choice ?? null)
+					: null
+			const latestOptions = latest ? parseOptions(latest.options) : []
+			const counts = Object.fromEntries(
+				latestOptions.map((option) => [option.key, 0]),
+			)
+			for (const vote of latest?.votes ?? []) {
+				if (vote.choice in counts) counts[vote.choice] += 1
+			}
+			const total = Object.values(counts).reduce((sum, count) => sum + count, 0)
 
 			return {
 				roomStatus: room.status,
+				choice,
+				latestResult: latest
+					? {
+							id: latest.id,
+							question: latest.question,
+							winnerLabel:
+								latestOptions.find(
+									(option) => option.key === latest.winningOption,
+								)?.label ?? null,
+							winnerCount: latest.winningOption
+								? (counts[latest.winningOption] ?? 0)
+								: 0,
+							total,
+							status:
+								latest.deliveryStatus ??
+								(latest.winningOption ? 'preparing' : 'unchanged'),
+							nextPollAt:
+								queued?.kind === 'evolution' && latest.resolvedAt
+									? new Date(
+											latest.resolvedAt.getTime() + room.pollIntervalSec * 1000,
+										)
+									: null,
+						}
+					: null,
 				poll: poll
 					? {
 							id: poll.id,
@@ -87,7 +143,19 @@ export const votingRouter = t.router({
 				polls: polls.map((poll) => ({
 					question: poll.question,
 					winningOption: poll.winningOption,
-					applied: versions.some((version) => version.source === poll.id),
+					winningLabel:
+						parseOptions(poll.options).find(
+							(option) => option.key === poll.winningOption,
+						)?.label ?? null,
+					deliveryStatus: poll.deliveryStatus,
+					applied: versions.some(
+						(version) =>
+							version.source === poll.id && version.status === 'applied',
+					),
+					reverted: versions.some(
+						(version) =>
+							version.source === poll.id && version.status === 'reverted',
+					),
 				})),
 				versions: versions.map((version) => ({
 					code: version.code,

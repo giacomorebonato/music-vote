@@ -2,7 +2,8 @@ export type PollOption = { key: string; label: string }
 
 /**
  * Live tally for the open poll. Rendered generically from the poll's option
- * keys: evolution polls use yes/no, the end poll uses wrap/continue.
+ * keys: evolution polls use two generated choices, the end poll uses
+ * wrap/continue.
  */
 export function PollMonitor({
 	question,
