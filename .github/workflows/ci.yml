@@ -21,7 +21,8 @@ jobs:
       - run: bunx prisma generate
         env:
           DATABASE_URL: file:./dev.db
-      - run: bun run check
+      - run: bun x playwright install --with-deps chromium
+      - run: bun run check:full
 
   deploy:
     needs: [check]

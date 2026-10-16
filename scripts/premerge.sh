@@ -24,7 +24,7 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 
 echo "Running pre-merge checks on '$branch'..."
-bash scripts/check.sh
+bun run check:full
 
 echo
 echo "Checks green. Merging '$branch' → main..."

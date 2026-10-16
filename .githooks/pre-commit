@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Fast gate at commit time: format/lint + typecheck.
-# Full gate (knip + tests + e2e) runs at pre-push.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-printf '\033[1m→ pre-commit: biome check + typecheck\033[0m\n'
-bunx biome check .
-bun run typecheck
-printf '\033[32m✓ pre-commit green\033[0m\n'
+bun run check --staged
+bun run lint --staged
+bun run fmt --staged
+
+# Also cover merges finished with `git commit` after --no-commit or conflicts.
+if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+	bash .githooks/pre-merge-commit
+fi

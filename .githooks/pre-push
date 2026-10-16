@@ -1,10 +1,21 @@
 #!/usr/bin/env bash
-# Full pre-merge gate at push time: biome + typecheck + knip + unit tests.
-# E2E (test:e2e) stays manual — run `bun run check:full` before claiming
-# UI/auth work is done.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-printf '\033[1m→ pre-push: full check\033[0m\n'
-bash scripts/check.sh
-printf '\033[32m✓ pre-push green\033[0m\n'
+# Gate pushes to main even when a fast-forward or manual merge bypassed the merge hook.
+pushes_main=false
+while read -r local_ref local_oid remote_ref remote_oid; do
+	if [ "$remote_ref" = refs/heads/main ] && ! [[ "$local_oid" =~ ^0+$ ]]; then
+		pushes_main=true
+		# Tests must describe the exact commit being published.
+		if [ "$local_oid" != "$(git rev-parse HEAD)" ] || [ -n "$(git status --porcelain)" ]; then
+			echo "Push main from its commit with a clean working tree so tests verify the pushed code." >&2
+			exit 1
+		fi
+	fi
+done
+if [ "$pushes_main" = true ]; then
+	bun run check:full
+else
+	bun run check
+fi

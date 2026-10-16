@@ -11,10 +11,11 @@
 - `bun run test:e2e` — Playwright E2E
 - `bun run test:e2e:ssr` — SSR E2E against the prod server (separate `playwright.ssr.config.ts`; clears its cache in `e2e/global-setup.ts`). The default `playwright.config.ts` ignores `ssr.spec.ts`
 - `bun run check` — pre-merge gate (`scripts/check.sh`): Biome check + typecheck + knip + unit tests. Shared with CI. Run **before claiming any work done**
-- `bun run check:full` — `check` + Playwright E2E. Run before claiming UI/auth/route work done (E2E is intentionally excluded from `check` for speed)
+- `bun run check:full` — `check` + both Playwright suites (dev and production SSR), each with a fresh server on port 3100 (`PLAYWRIGHT_PORT` overrides it), keeping the dev server independent. Run before claiming UI/auth/route work done (E2E is intentionally excluded from `check` for speed)
+- `bun check --staged`, `bun lint --staged`, `bun fmt --staged` — verify the staged index in an isolated snapshot, including partially staged files. Biome checks changed files; staged `check` also runs project-wide typecheck + knip. With no staged changes these are no-ops; deletions still run typecheck + knip. `lint` and `fmt` without `--staged` verify the whole project. These commands never write fixes.
 - `bun run format` — Biome check + format, **writes fixes** (`biome check --write .`); `check` verifies without writing
 - `bun run bootstrap` — fresh-clone setup (deps + APM skills/MCP + Prisma client + migrate dev DB + git hooks); idempotent
-- `bun run premerge` — `check`, then fast-forward current branch → main and push
+- `bun run premerge` — `check:full`, then fast-forward current branch → main and push
 - `bun run db:migrate` — `prisma migrate dev && prisma generate` (v7: `migrate dev` no longer auto-generates the client) — see [prisma.md](prisma.md)
 - `bun run db:reset` — `prisma migrate reset`
 
@@ -40,7 +41,7 @@ Run the gate (`bun run check`) — or `bun run test --parallel` — for unit tes
 
 ## Git hooks
 
-`.githooks/pre-commit` runs Biome check + typecheck. `.githooks/pre-push` runs the full `scripts/check.sh` gate. `bun run bootstrap` sets `core.hooksPath = .githooks`. Bypass with `--no-verify` only when intentionally breaking the gate.
+`.githooks/pre-commit` requires `bun check --staged`, `bun lint --staged`, and `bun fmt --staged`. `.githooks/pre-push` runs `check`, or `check:full` when pushing main (requiring a clean tree at the commit being pushed). `.githooks/pre-merge-commit` runs `check:full` for merge commits on main; pre-commit also invokes it for manually completed merges. Git does not invoke a merge hook for fast-forwards, so use `bun run premerge` for a tested fast-forward; the main-push hook also enforces the full gate. CI runs `check:full` for main and its pull requests; configure branch protection to require the `check` job to prevent remote bypasses. `bun run bootstrap` sets `core.hooksPath = .githooks`.
 
 ## Knip
 

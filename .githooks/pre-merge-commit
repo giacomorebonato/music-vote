@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Git invokes this for automatic merge commits (fast-forwards have no merge hook).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+if [ "$(git branch --show-current)" = main ]; then
+	if ! git diff --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+		echo "Remove unstaged and untracked changes before merging so tests verify the merge contents." >&2
+		exit 1
+	fi
+	bun run check:full
+fi

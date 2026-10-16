@@ -11,7 +11,7 @@
 		"start": "NODE_ENV=production bun backend/server.ts",
 		"test": "bun test backend shared frontend",
 		"test:e2e": "playwright test",
-		"check:full": "bash scripts/check.sh && bun run test:e2e",
+		"check:full": "bun run check && PORT=${PLAYWRIGHT_PORT:-3100} CI=1 bun run test:e2e && PORT=${PLAYWRIGHT_PORT:-3100} CI=1 bun run test:e2e:ssr",
 		"test:e2e:ssr": "playwright test --config=playwright.ssr.config.ts",
 		"format": "biome check --write .",
 		"typecheck": "tsc --noEmit",
@@ -21,7 +21,9 @@
 		"premerge": "bash scripts/premerge.sh",
 		"db:migrate": "prisma migrate dev && prisma generate",
 		"db:reset": "prisma migrate reset",
-		"postinstall": "prisma generate"
+		"postinstall": "prisma generate",
+		"lint": "bash scripts/quality.sh lint",
+		"fmt": "bash scripts/quality.sh fmt"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.9",
