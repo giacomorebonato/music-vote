@@ -167,6 +167,29 @@ test('host runs a set that the audience votes through, undoes, and ends', async 
 		.poll(() => audioStarts(host), { timeout: 30_000 })
 		.toBeGreaterThan(0)
 
+	// The real Strudel editor follows this same playing pattern and clock.
+	const pattern = host.getByTestId('current-code')
+	await expect(pattern.locator('.cm-content')).toContainText('s(')
+	await expect(pattern.locator('.cm-content')).toHaveAttribute(
+		'contenteditable',
+		'false',
+	)
+	await expect
+		.poll(() => pattern.locator('span[style*="outline"]').count(), {
+			timeout: 10_000,
+		})
+		.toBeGreaterThan(0)
+	const visual = host.getByTestId('pattern-visual')
+	await expect(visual).toBeVisible()
+	const firstFrame = await visual.evaluate((canvas) =>
+		(canvas as HTMLCanvasElement).toDataURL(),
+	)
+	await expect
+		.poll(() =>
+			visual.evaluate((canvas) => (canvas as HTMLCanvasElement).toDataURL()),
+		)
+		.not.toBe(firstFrame)
+
 	// --- phone A votes, phone B votes, phone A votes again ---------------
 	await phoneA.getByTestId(optionTestId).click()
 	await expect(phoneA.getByTestId('vote-counted')).toBeVisible()
@@ -255,6 +278,18 @@ test('host runs a set that the audience votes through, undoes, and ends', async 
 	await expect(host.getByTestId('room-status')).toHaveText('ended', {
 		timeout: OUTRO_WINDOW_MS + 30_000,
 	})
+	await expect(pattern.locator('span[style*="outline"]')).toHaveCount(0)
+	await expect
+		.poll(() =>
+			visual.evaluate((node) => {
+				const canvas = node as HTMLCanvasElement
+				return canvas
+					.getContext('2d')
+					?.getImageData(0, 0, canvas.width, canvas.height)
+					.data.some((value) => value !== 0)
+			}),
+		)
+		.toBe(false)
 
 	// --- audio actually ran, and actually stopped -------------------------
 	// The `ended` effect hushes the engine on the render after the status flips,

@@ -7,6 +7,7 @@ import {
 import { AppLayout } from '@frontend/components/app-layout'
 import { PollMonitor } from '@frontend/components/poll-monitor'
 import { QrCode } from '@frontend/components/qr-code'
+import { StrudelPattern } from '@frontend/components/strudel-pattern'
 import {
 	type ApplyStatus,
 	type ApplyStatusFact,
@@ -674,16 +675,13 @@ function HostConsole({ roomId }: { roomId: string }) {
 					/>
 				) : null}
 
-				<details className="collapse-arrow collapse bg-base-200">
+				<details open className="collapse-arrow collapse bg-base-200">
 					<summary className="collapse-title font-medium">
 						Current pattern
 					</summary>
-					<pre
-						className="collapse-content overflow-x-auto text-xs"
-						data-testid="current-code"
-					>
-						{displayCode ?? '—'}
-					</pre>
+					<div className="collapse-content">
+						<StrudelPattern code={displayCode} />
+					</div>
 				</details>
 			</div>
 

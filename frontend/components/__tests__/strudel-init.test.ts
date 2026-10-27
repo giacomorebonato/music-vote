@@ -1,6 +1,14 @@
 import { expect, mock, test } from 'bun:test'
 
-const initStrudel = mock(() => Promise.resolve())
+const playbackState = {
+	activeCode: '// LOADING',
+	miniLocations: [],
+	started: false,
+}
+const scheduler = { now: () => 0, pattern: null }
+const initStrudel = mock((_options: unknown) =>
+	Promise.resolve({ scheduler, state: playbackState }),
+)
 const hush = mock(() => undefined)
 const evaluate = mock(() => Promise.resolve(undefined as unknown))
 const samples = mock(() => Promise.resolve())
@@ -23,8 +31,13 @@ mock.module('@strudel/web', () => ({
 	getSampleInfo,
 }))
 
-const { applyPattern, stopStrudel, initStrudelOnce, resumeAudio } =
-	await import('@frontend/audio/strudel-init')
+const {
+	applyPattern,
+	stopStrudel,
+	initStrudelOnce,
+	resumeAudio,
+	subscribePlayback,
+} = await import('@frontend/audio/strudel-init')
 
 function audioContextFake(
 	state: string,
@@ -147,4 +160,17 @@ test('a second applyPattern call while playing does not throw', async () => {
 test('stop calls hush', () => {
 	stopStrudel()
 	expect(hush).toHaveBeenCalled()
+})
+
+test('playback observers receive the existing scheduler and can unsubscribe', async () => {
+	await initStrudelOnce()
+	const listener = mock(() => undefined)
+	const unsubscribe = subscribePlayback(listener)
+	expect(listener).toHaveBeenCalledWith(playbackState, scheduler)
+	unsubscribe()
+	const options = initStrudel.mock.calls[0]?.[0] as unknown as {
+		onUpdateState: (state: typeof playbackState) => void
+	}
+	options.onUpdateState({ ...playbackState, started: true })
+	expect(listener).toHaveBeenCalledTimes(1)
 })
