@@ -83,6 +83,29 @@ test('persistent crowd preferences remain editable across updates, reloads and s
 			.poll(() => audioStarts(host), { timeout: 30_000 })
 			.toBeGreaterThan(0)
 
+		// The real Strudel editor follows this same playing pattern and clock.
+		const pattern = host.getByTestId('current-code')
+		await expect(pattern.locator('.cm-content')).toContainText('s(')
+		await expect(pattern.locator('.cm-content')).toHaveAttribute(
+			'contenteditable',
+			'false',
+		)
+		await expect
+			.poll(() => pattern.locator('span[style*="outline"]').count(), {
+				timeout: 10_000,
+			})
+			.toBeGreaterThan(0)
+		const visual = host.getByTestId('pattern-visual')
+		await expect(visual).toBeVisible()
+		const firstFrame = await visual.evaluate((canvas) =>
+			(canvas as HTMLCanvasElement).toDataURL(),
+		)
+		await expect
+			.poll(() =>
+				visual.evaluate((canvas) => (canvas as HTMLCanvasElement).toDataURL()),
+			)
+			.not.toBe(firstFrame)
+
 		// Both phones contribute, then A replaces its choice. B sees every count.
 		await phoneA.getByTestId('vote-option-mellow').click()
 		await expect(phoneA.getByTestId('vote-option-mellow')).toHaveAttribute(
@@ -160,6 +183,19 @@ test('persistent crowd preferences remain editable across updates, reloads and s
 		await expect(host.getByTestId('room-status')).toHaveText('ended', {
 			timeout: 90_000,
 		})
+		await expect(pattern.locator('span[style*="outline"]')).toHaveCount(0)
+		await expect
+			.poll(() =>
+				visual.evaluate((node) => {
+					const canvas = node as HTMLCanvasElement
+					return canvas
+						.getContext('2d')
+						?.getImageData(0, 0, canvas.width, canvas.height)
+						.data.some((value) => value !== 0)
+				}),
+			)
+			.toBe(false)
+
 		await expect(phoneB.getByText('Thanks for the dance')).toBeVisible()
 		await expect(phoneB.getByTestId('vote-option-intense')).toContainText(
 			'2 · 100%',

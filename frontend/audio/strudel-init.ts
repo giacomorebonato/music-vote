@@ -59,6 +59,8 @@ import {
 	initStrudel,
 	loadBuffer,
 	samples,
+	type ReplState,
+	type Scheduler,
 } from '@strudel/web'
 
 export type ApplyResult =
@@ -66,6 +68,33 @@ export type ApplyResult =
 
 let initPromise: Promise<unknown> | null = null
 let lastEvalError: Error | null = null
+let scheduler: Scheduler | null = null
+let playbackState: ReplState | null = null
+const playbackListeners = new Set<
+	(state: ReplState, clock: Scheduler) => void
+>()
+
+function publishPlayback(): void {
+	if (!playbackState || !scheduler) return
+	for (const listener of playbackListeners) {
+		try {
+			listener(playbackState, scheduler)
+		} catch (err) {
+			// A visual failure must not turn a successful music update into a failure.
+			console.error('Strudel visual update failed', err)
+		}
+	}
+}
+
+export function subscribePlayback(
+	listener: (state: ReplState, clock: Scheduler) => void,
+): () => void {
+	playbackListeners.add(listener)
+	if (playbackState && scheduler) listener(playbackState, scheduler)
+	return () => {
+		playbackListeners.delete(listener)
+	}
+}
 
 const onEvalError = (err: Error): void => {
 	lastEvalError = err
@@ -80,6 +109,10 @@ export function initStrudelOnce(): Promise<unknown> {
 
 	const promise = initStrudel({
 		onEvalError,
+		onUpdateState: (state: ReplState) => {
+			playbackState = { ...state }
+			publishPlayback()
+		},
 		prebake: async () => {
 			try {
 				await samples('github:tidalcycles/dirt-samples')
@@ -92,10 +125,17 @@ export function initStrudelOnce(): Promise<unknown> {
 		},
 	})
 
-	initPromise = promise.catch((err) => {
-		initPromise = null
-		throw err
-	})
+	initPromise = promise
+		.then((repl) => {
+			scheduler = repl.scheduler
+			playbackState = { ...repl.state }
+			publishPlayback()
+			return repl
+		})
+		.catch((err) => {
+			initPromise = null
+			throw err
+		})
 	return initPromise
 }
 
