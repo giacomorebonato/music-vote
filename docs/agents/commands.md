@@ -35,7 +35,7 @@ Run the gate (`bun run verify`) — or `bun run test --parallel` — for unit te
 - `DATABASE_URL` — `file:./dev.db` (dev), `file:./test.db` (E2E test DB), `file:/data/prod.db` (prod); unit tests override it per file (see [Test databases](#test-databases))
 - `BETTER_AUTH_SECRET` — random, e.g. `openssl rand -base64 32`
 - `BETTER_AUTH_URL` — e.g. `http://localhost:3000` (dev) / `https://music-vote.fly.dev` (prod)
-- `LLM_PROVIDER` / `OLLAMA_BASE_URL` / `OLLAMA_MODEL` / `OLLAMA_API_KEY` / `LLM_MOCK_SCRIPT` — LLM provider config; prod deploy + ops notes in [music-vote.md](music-vote.md)
+- `LLM_PROVIDER` / `OLLAMA_BASE_URL` / `OLLAMA_MODEL` / `OLLAMA_API_KEY` / `OLLAMA_THINK` / `LLM_MOCK_SCRIPT` — LLM provider config; prod deploy + ops notes in [music-vote.md](music-vote.md)
 - SSR prerender (optional, prod-only): `SSR_CACHE_DIR`, `LIGHTPANDA_EXECUTABLE_PATH` — see [bot-ssr.md](bot-ssr.md)
 
 `NODE_ENV` and `REACT_COMPILER` come from the scripts/Dockerfile rather than `.env`. Crowd preferences are checked every 10 seconds in every environment. The former `MV_E2E_FAST`, `MV_TEST_INTERVAL_SECS`, and `MV_TEST_POLL_OPEN_SECS` poll timing overrides are retired.

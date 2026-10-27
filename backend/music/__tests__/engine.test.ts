@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test'
+import { expect, spyOn, test } from 'bun:test'
 import { type LlmProvider, MockLlmProvider } from '@backend/llm/provider'
 import {
 	FALLBACK_OPTIONS,
@@ -348,4 +348,37 @@ test('crowd evolution validates code, retries invalid output, and treats identic
 	expect(
 		await generateCrowdEvolution(new ThrowingProvider(), doc, [], validCode),
 	).toBeNull()
+})
+
+test('initial generation exposes the provider failure and logs both attempts without the prompt', async () => {
+	const cause = new Error('Ollama chat failed: 401')
+	const warn = spyOn(console, 'warn').mockImplementation(() => {})
+	try {
+		const provider = {
+			chat: async () => {
+				throw cause
+			},
+		}
+		const error = await generateInitialPattern(provider, params).catch(
+			(error) => error,
+		)
+		expect(error).toBeInstanceOf(MusicGenError)
+		expect(error.message).toContain('Ollama chat failed: 401')
+		expect(error.cause).toBe(cause)
+		expect(warn).toHaveBeenCalledTimes(2)
+		expect(warn).toHaveBeenLastCalledWith('[music] generation request failed', {
+			attempt: 2,
+			error: cause.message,
+		})
+	} finally {
+		warn.mockRestore()
+	}
+})
+
+test('initial generation distinguishes rejected code from a provider failure', async () => {
+	await expect(
+		generateInitialPattern(new MockLlmProvider([fetchCode, fetchCode]), params),
+	).rejects.toThrow(
+		'Generated pattern was rejected: blocked: disallowed pattern (fetch)',
+	)
 })

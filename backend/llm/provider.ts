@@ -10,6 +10,7 @@ export type OllamaConfig = {
 	baseUrl: string
 	model: string
 	apiKey?: string
+	think?: boolean | string
 }
 
 // Ollama returns the assistant reply as { message: { content } }. LLMs often
@@ -27,11 +28,13 @@ export class OllamaProvider implements LlmProvider {
 	private readonly baseUrl: string
 	private readonly model: string
 	private readonly apiKey: string | undefined
+	private readonly think: boolean | string | undefined
 
-	constructor({ baseUrl, model, apiKey }: OllamaConfig) {
+	constructor({ baseUrl, model, apiKey, think }: OllamaConfig) {
 		this.baseUrl = baseUrl.replace(/\/$/, '')
 		this.model = model
 		this.apiKey = apiKey
+		this.think = think
 	}
 
 	async chat(prompt: string, opts?: LlmChatOptions): Promise<string> {
@@ -44,6 +47,7 @@ export class OllamaProvider implements LlmProvider {
 			messages,
 			stream: false,
 		}
+		if (this.think !== undefined) body.think = this.think
 		if (opts?.temperature !== undefined) {
 			body.options = { temperature: opts.temperature }
 		}
@@ -53,24 +57,35 @@ export class OllamaProvider implements LlmProvider {
 		}
 		if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`
 
-		const response = await fetch(`${this.baseUrl}/api/chat`, {
-			method: 'POST',
-			signal: AbortSignal.timeout(25_000),
-			headers,
-			body: JSON.stringify(body),
-		})
-		if (!response.ok) {
-			throw new Error(`Ollama chat failed: ${response.status}`)
-		}
+		const signal = AbortSignal.timeout(25_000)
+		try {
+			const response = await fetch(`${this.baseUrl}/api/chat`, {
+				method: 'POST',
+				signal,
+				headers,
+				body: JSON.stringify(body),
+			})
+			if (!response.ok) {
+				throw new Error(`Ollama chat failed: ${response.status}`)
+			}
 
-		const data = (await response.json()) as {
-			message?: { content?: unknown }
+			const data = (await response.json()) as {
+				message?: { content?: unknown }
+			}
+			const content = data.message?.content
+			if (typeof content !== 'string') {
+				throw new Error('Ollama chat response missing message.content')
+			}
+			return stripCodeFences(content)
+		} catch (cause) {
+			if (signal.aborted) {
+				throw new Error(
+					`Ollama model ${this.model} timed out after 25 seconds`,
+					{ cause },
+				)
+			}
+			throw cause
 		}
-		const content = data.message?.content
-		if (typeof content !== 'string') {
-			throw new Error('Ollama chat response missing message.content')
-		}
-		return stripCodeFences(content)
 	}
 }
 
@@ -133,6 +148,7 @@ export function getLlmProvider(): LlmProvider {
 	const kind = process.env.LLM_PROVIDER?.trim() || 'ollama'
 	if (kind === 'mock') return new MockLlmProvider()
 	if (kind === 'ollama') {
+		const think = process.env.OLLAMA_THINK?.trim()
 		const model = process.env.OLLAMA_MODEL
 		if (!model) {
 			throw new Error('OLLAMA_MODEL is required for LLM_PROVIDER=ollama')
@@ -141,6 +157,12 @@ export function getLlmProvider(): LlmProvider {
 			baseUrl: process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434',
 			model,
 			apiKey: process.env.OLLAMA_API_KEY || undefined,
+			think:
+				think === 'true'
+					? true
+					: think === 'false'
+						? false
+						: think || undefined,
 		})
 	}
 	throw new Error(`Unknown LLM_PROVIDER: ${kind}`)

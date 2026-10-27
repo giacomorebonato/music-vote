@@ -8,4 +8,8 @@ export const auth = betterAuth({
 	secret: process.env.BETTER_AUTH_SECRET,
 	database: prismaAdapter(prisma, { provider: 'sqlite' }),
 	emailAndPassword: { enabled: true },
+	// Fly's proxy supplies this header; only trust it inside the Fly runtime.
+	...(process.env.FLY_APP_NAME
+		? { advanced: { ipAddress: { ipAddressHeaders: ['fly-client-ip'] } } }
+		: {}),
 })

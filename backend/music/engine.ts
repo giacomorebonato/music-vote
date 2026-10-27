@@ -92,22 +92,33 @@ function parseQuestionResponse(raw: string): GeneratedQuestion | null {
 async function tryGenerateCode(
 	provider: LlmProvider,
 	prompt: string,
-): Promise<string | null> {
+): Promise<{ code: string; error?: never } | { code: null; error: Error }> {
+	let lastError = new Error('No pattern generated')
 	for (let attempt = 0; attempt < MAX_CODE_ATTEMPTS; attempt++) {
 		let raw: string
 		try {
 			raw = await provider.chat(prompt)
-		} catch {
+		} catch (cause) {
+			lastError = cause instanceof Error ? cause : new Error(String(cause))
+			console.warn('[music] generation request failed', {
+				attempt: attempt + 1,
+				error: lastError.message,
+			})
 			continue
 		}
 
 		const check = compileCheck(raw)
 		if (check.ok) {
-			return raw
+			return { code: raw }
 		}
+		lastError = new Error(`Generated pattern was rejected: ${check.error}`)
+		console.warn('[music] pattern validation failed', {
+			attempt: attempt + 1,
+			error: check.error,
+		})
 	}
 
-	return null
+	return { code: null, error: lastError }
 }
 
 export async function generateInitialPattern(
@@ -115,11 +126,12 @@ export async function generateInitialPattern(
 	params: MusicParams,
 ): Promise<{ code: string; doc: StateDoc }> {
 	const prompt = buildInitialPatternPrompt(params)
-	const code = await tryGenerateCode(provider, prompt)
+	const { code, error } = await tryGenerateCode(provider, prompt)
 
 	if (code === null) {
 		throw new MusicGenError(
-			'Failed to generate a valid initial pattern after 2 attempts',
+			`Failed to generate an initial pattern after 2 attempts: ${error.message}`,
+			{ cause: error },
 		)
 	}
 
@@ -141,7 +153,7 @@ export async function generateEvolution(
 	currentCode: string,
 ): Promise<{ code: string; changeSummary: string } | null> {
 	const prompt = buildEvolutionPrompt(doc, question, winner, currentCode)
-	const code = await tryGenerateCode(provider, prompt)
+	const { code } = await tryGenerateCode(provider, prompt)
 
 	if (code === null) {
 		return null
@@ -156,10 +168,13 @@ export async function generateOutro(
 	currentCode: string,
 ): Promise<string> {
 	const prompt = buildOutroPrompt(doc, currentCode)
-	const code = await tryGenerateCode(provider, prompt)
+	const { code, error } = await tryGenerateCode(provider, prompt)
 
 	if (code === null) {
-		throw new MusicGenError('Failed to generate a valid outro after 2 attempts')
+		throw new MusicGenError(
+			`Failed to generate an outro after 2 attempts: ${error.message}`,
+			{ cause: error },
+		)
 	}
 
 	return code

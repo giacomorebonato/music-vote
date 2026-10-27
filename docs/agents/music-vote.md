@@ -72,6 +72,33 @@ set as Fly env/secrets at deploy time (`LLM_PROVIDER` defaults to `ollama`).
 Redeploy after code changes: `fly deploy`. Migrations run on every boot
 (`migrate deploy`, idempotent).
 
+## Strudel dependencies
+
+The server transpiler and browser Strudel packages use the same 1.2.6 core.
+`scripts/patches/@kabelsalat%2Fweb@0.4.1.patch` fixes the synth dependency's
+`main` entry to its shipped ESM build so Bun can import it on the server.
+Bun applies the registered patch during install; Docker copies patches before
+its frozen install. Recheck this patch when updating Strudel or Kabelsalat.
+
+## Model latency and failed starts
+
+Fly sets `OLLAMA_THINK=low` in `fly.toml` for the deployed MiniMax M3.1 Flash
+model. `OLLAMA_THINK` is optional: empty uses the model default; `true`/`false`
+become booleans, and other values are model-specific thinking levels. Check a
+new model's supported levels before switching it. An existing Fly secret with
+the same name overrides `fly.toml`.
+
+Keep each Ollama request bounded to 25 seconds. Generation retries once and
+logs whether each attempt failed at the provider or during pattern validation;
+opening/outro errors retain the last failure in the host-visible message and
+Error cause. Logs omit prompts, generated code, and API keys.
+
+When a set cannot start, test the opening prompt from the Fly machine with the
+same model and thinking level. A successful `/api/tags` request only proves the
+endpoint is reachable, not that generation finishes within the deadline. In a
+production probe, MiniMax's default thinking timed out at both 25 and 90 seconds;
+`think: "low"` returned a validated opening pattern in about 10 seconds.
+
 ## Ops notes
 
 - **One machine, forever.** SQLite lives on a local Fly volume — there is no

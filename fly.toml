@@ -1,6 +1,10 @@
 app = "music-vote"
 primary_region = "ams"
 
+[env]
+# Keep reasoning bounded for short live-music requests.
+OLLAMA_THINK = "low"
+
 [build]
 
 [mount]

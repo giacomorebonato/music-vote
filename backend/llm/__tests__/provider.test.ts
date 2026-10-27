@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test'
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,6 +13,7 @@ const LLM_ENV_KEYS = [
 	'LLM_MOCK_SCRIPT',
 	'OLLAMA_BASE_URL',
 	'OLLAMA_MODEL',
+	'OLLAMA_THINK',
 	'OLLAMA_API_KEY',
 ] as const
 
@@ -221,3 +222,56 @@ test('factory treats a whitespace-only LLM_PROVIDER as unset', () => {
 	process.env.LLM_PROVIDER = '   '
 	expect(getLlmProvider()).toBeInstanceOf(OllamaProvider)
 })
+
+for (const [setting, expected] of [
+	['low', 'low'],
+	['true', true],
+	['false', false],
+	['', undefined],
+] as const) {
+	test(`factory forwards thinking setting ${JSON.stringify(setting)} to Ollama`, async () => {
+		process.env.OLLAMA_MODEL = 'minimax-m3.1-flash:cloud'
+		process.env.OLLAMA_THINK = setting
+		const calls = stubFetch({ message: { content: 's("bd")' } })
+		await getLlmProvider().chat('opening pattern')
+		expect(JSON.parse(String(calls[0]?.init.body)).think).toBe(expected)
+	})
+}
+
+test('ollama preserves HTTP failures for generation diagnostics', async () => {
+	globalThis.fetch = (async () =>
+		new Response(null, { status: 401 })) as unknown as typeof fetch
+	const provider = new OllamaProvider({
+		baseUrl: 'https://ollama.com',
+		model: 'test',
+	})
+	await expect(provider.chat('hi')).rejects.toThrow('Ollama chat failed: 401')
+})
+
+for (const phase of ['request', 'body'] as const) {
+	test(`ollama reports a timeout during ${phase} with the model and deadline`, async () => {
+		const timeout = new DOMException('The operation timed out.', 'TimeoutError')
+		const signal = AbortSignal.abort(timeout)
+		const timeoutSpy = spyOn(AbortSignal, 'timeout').mockReturnValue(signal)
+		globalThis.fetch = (async () => {
+			if (phase === 'request') throw timeout
+			return {
+				ok: true,
+				json: async () => {
+					throw timeout
+				},
+			} as unknown as Response
+		}) as unknown as typeof fetch
+		try {
+			const provider = new OllamaProvider({
+				baseUrl: 'https://ollama.com',
+				model: 'test-model',
+			})
+			await expect(provider.chat('hi')).rejects.toThrow(
+				'Ollama model test-model timed out after 25 seconds',
+			)
+		} finally {
+			timeoutSpy.mockRestore()
+		}
+	})
+}

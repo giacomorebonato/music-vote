@@ -1,6 +1,7 @@
 FROM oven/bun:1.4.2 AS build
 WORKDIR /app
 COPY package.json bun.lock ./
+COPY scripts/patches ./scripts/patches
 COPY prisma ./prisma
 RUN bun install --frozen-lockfile
 COPY . .

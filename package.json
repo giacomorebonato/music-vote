@@ -44,7 +44,7 @@
 		"@prisma/client": "7",
 		"@strudel/codemirror": "1.3.0",
 		"@strudel/draw": "1.2.6",
-		"@strudel/transpiler": "1.1.0",
+		"@strudel/transpiler": "1.2.6",
 		"@strudel/web": "1.3.0",
 		"@tanstack/react-form": "^1.33.5",
 		"@tanstack/react-query": "5.101.4",
@@ -64,5 +64,8 @@
 	"trustedDependencies": [
 		"@lightpanda/browser",
 		"bun"
-	]
+	],
+	"patchedDependencies": {
+		"@kabelsalat/web@0.4.1": "scripts/patches/@kabelsalat%2Fweb@0.4.1.patch"
+	}
 }
