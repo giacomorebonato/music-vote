@@ -16,7 +16,8 @@ Target: app `music-vote` on Fly.io. Infra files live in repo: `Dockerfile` (mult
     BETTER_AUTH_URL=https://music-vote.fly.dev NODE_ENV=production
   flyctl deploy
   ```
-- **Redeploy** (update code, keep data): `flyctl deploy`.
+- **Automatic deploy**: `.github/workflows/ci.yml` runs the full verification gate on pushes to `main` (including merged PRs), then deploys to the GitHub `production` environment. The repository Actions secret `FLY_API_TOKEN` must contain an app-scoped Fly deploy token. Production deploys are serialized and use `--ha=false` to keep SQLite on one machine. `workflow_dispatch` can also run verification and deployment from `main`.
+- **Redeploy** (update code, keep data): `flyctl deploy --ha=false`.
 - **Replace an existing app** (fresh state, wipes data): `flyctl apps destroy music-vote` then run the first-deploy steps. The volume must be recreated.
 - **Open**: `flyctl apps open` → `https://music-vote.fly.dev`.
 - **Rename**: this repo's app and volume were renamed from the starter's `mino-starter` / `mino_starter_data` to `music-vote` / `music_vote_data`, and nothing migrates data for you — an existing starter deployment's volume is not carried over, so a fresh `fly apps create` here starts from an empty volume.
