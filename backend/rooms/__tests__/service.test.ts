@@ -598,3 +598,42 @@ test('endRoom keeps the current pattern and still ends when outro generation fai
 	)
 	jest.useRealTimers()
 })
+
+test('performance actions require owner and live room, and commit only on playback confirmation', async () => {
+	const host = await makeHost()
+	const room = await service.createRoom(host.id, baseInput())
+	await expect(service.perform(room.id, host.id, 'build')).rejects.toThrow(
+		'Live room',
+	)
+	await service.startRoom(room.id, host.id)
+	await service.setGrooveLock(room.id, host.id, true)
+	await expect(
+		service.perform(room.id, 'someone-else', 'build'),
+	).rejects.toThrow('access denied')
+	await expect(
+		service.setGrooveLock(room.id, 'someone-else', false),
+	).rejects.toThrow('access denied')
+	const original = await prisma.room.findUniqueOrThrow({
+		where: { id: room.id },
+	})
+	await service.perform(room.id, host.id, 'build')
+	const candidate = await prisma.patternVersion.findFirstOrThrow({
+		where: { roomId: room.id, status: 'candidate' },
+	})
+	expect(
+		(await prisma.room.findUniqueOrThrow({ where: { id: room.id } }))
+			.currentCode,
+	).toBe(original.currentCode)
+	await expect(service.perform(room.id, host.id, 'drop')).rejects.toThrow(
+		'Wait',
+	)
+	await service.reportApplyResult(room.id, host.id, candidate.id, true)
+	expect(
+		(await prisma.room.findUniqueOrThrow({ where: { id: room.id } }))
+			.currentCode,
+	).toBe(candidate.code)
+	await service.undoLastChange(room.id, host.id)
+	const undone = await prisma.room.findUniqueOrThrow({ where: { id: room.id } })
+	expect(undone.currentCode).toBe(original.currentCode)
+	expect(undone.grooveLocked).toBe(true)
+})

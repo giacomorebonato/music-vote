@@ -8,11 +8,34 @@ question and change your mind anytime; each phone's latest answer counts once.
 
 There are no winners, voting deadlines or majority decisions. Live counts are
 for fun. Every 10 seconds the server checks for a changed crowd distribution
-and sends the complete snapshot to the music agent. The agent can gently evolve
-the groove or hold it. Updates are serialized through host playback confirmation;
+and sends the complete snapshot to the music agent. The agent can evolve the groove with an audible transition or hold it when it
+already fits. Updates are serialized through host playback confirmation;
 answers collected in the meantime feed the next snapshot. An AI outro closes
 the set, and phones retain the final crowd distribution. The server owns room
 state; the host browser is the audio engine.
+
+## Performing live
+
+The host console includes **Build up**, **Drop**, and **Strip back**. These
+prepared transformations keep the current musical material and tempo and wait
+for the next four-bar phrase on the host's audio clock. Build up thins the bass
+and adds a snare roll; Drop restores the full groove with a kick and clap accent;
+Strip back creates a filtered breakdown. Repeated actions replace the previous
+performance layer. Undo restores the preceding confirmed pattern.
+
+**Lock this groove** pauses automatic crowd evolution while phones keep voting.
+The lock survives reloads and Undo. **Release groove** lets the next crowd check
+use the latest answers. Manual performance controls work while locked.
+
+**Performance view** fills the projector with a beat-synchronized visual, live
+crowd preferences and a QR code. Reveal code shows the playing Strudel pattern;
+Escape or Exit performance returns to the console without stopping audio.
+
+The host preloads the demo drum palette (`bd`, `sd`, `cp`, `hh`, `ho`, index 0)
+and displays **Demo sounds ready** when every sample has loaded. Retry sounds
+rechecks failed downloads. Opening and crowd prompts use that palette plus
+synthesized bass, hooks and harmony, with house, techno and funk opening anchors.
+Generated music still benefits from a rehearsal with the chosen model and PA.
 
 ## Quick start
 

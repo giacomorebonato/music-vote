@@ -1,0 +1,1 @@
+ALTER TABLE "Room" ADD COLUMN "grooveLocked" BOOLEAN NOT NULL DEFAULT false;

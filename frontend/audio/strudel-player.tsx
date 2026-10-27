@@ -3,6 +3,7 @@ import {
 	applyPattern,
 	initStrudelOnce,
 	stopStrudel,
+	waitForPhrase,
 } from '@frontend/audio/strudel-init'
 import {
 	forwardRef,
@@ -13,7 +14,7 @@ import {
 } from 'react'
 
 export type StrudelPlayerRef = {
-	applyPattern: (code: string) => Promise<ApplyResult>
+	applyPattern: (code: string, phraseAligned?: boolean) => Promise<ApplyResult>
 	stop: () => void
 }
 
@@ -31,19 +32,37 @@ export const StrudelPlayer = forwardRef<StrudelPlayerRef, StrudelPlayerProps>(
 		autoplayRef.current = autoplay
 		onResultRef.current = onApplyResult
 
-		const run = useCallback(async (candidate: string) => {
-			const result = await applyPattern(candidate, autoplayRef.current)
-			onResultRef.current(result)
-			return result
+		const operationRef = useRef(0)
+		const run = useCallback(
+			async (
+				candidate: string,
+				phraseAligned = false,
+			): Promise<ApplyResult> => {
+				const operation = ++operationRef.current
+				if (
+					phraseAligned &&
+					!(await waitForPhrase(() => operation !== operationRef.current))
+				)
+					return { ok: false, error: 'Scheduled change cancelled' }
+				const result = await applyPattern(candidate, autoplayRef.current)
+				onResultRef.current(result)
+				return result
+			},
+			[],
+		)
+
+		const stop = useCallback(() => {
+			operationRef.current++
+			stopStrudel()
 		}, [])
 
 		useImperativeHandle(
 			ref,
 			() => ({
 				applyPattern: run,
-				stop: stopStrudel,
+				stop,
 			}),
-			[run],
+			[run, stop],
 		)
 
 		useEffect(() => {
@@ -56,11 +75,7 @@ export const StrudelPlayer = forwardRef<StrudelPlayerRef, StrudelPlayerProps>(
 			void initStrudelOnce()
 		}, [])
 
-		useEffect(() => {
-			return () => {
-				stopStrudel()
-			}
-		}, [])
+		useEffect(() => stop, [stop])
 
 		return null
 	},

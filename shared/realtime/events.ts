@@ -40,6 +40,7 @@ export type CodeUpdateEvent = {
 	code: string
 	versionId: string
 	kind: 'initial' | 'evolution' | 'undo' | 'outro'
+	phraseAligned?: boolean
 }
 
 /** @public */

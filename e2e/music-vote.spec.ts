@@ -175,6 +175,52 @@ test('persistent crowd preferences remain editable across updates, reloads and s
 		await expect
 			.poll(() => audioStarts(host), { timeout: 15_000 })
 			.toBeGreaterThan(liveStarts)
+		// The host can hold a good groove, perform prepared changes, and reveal
+		// the playing code without remounting the audio engine.
+		await host.getByTestId('groove-lock').click()
+		await expect(host.getByTestId('groove-lock')).toHaveAttribute(
+			'aria-pressed',
+			'true',
+		)
+		await host.reload()
+		await expect(host.getByTestId('groove-lock')).toHaveAttribute(
+			'aria-pressed',
+			'true',
+		)
+		await host.getByTestId('open-performance').click()
+		const stage = host.getByTestId('performance-stage')
+		await expect(stage).toBeVisible()
+		await expect(stage.getByTestId('qr-code')).toBeVisible()
+		await expect(stage.getByTestId('dance-visual')).toBeVisible()
+		for (const action of ['build', 'strip', 'drop']) {
+			await stage.getByTestId(`perform-${action}`).click()
+			await expect(stage.getByTestId(`perform-${action}`)).toBeDisabled()
+			await expect(stage.getByTestId(`perform-${action}`)).toBeEnabled({
+				timeout: 25_000,
+			})
+			await expect(host.getByTestId('apply-status')).toHaveText(
+				'change applied',
+				{ timeout: 25_000 },
+			)
+		}
+		await stage.getByRole('button', { name: 'Reveal code' }).click()
+		await expect(stage.getByTestId('current-code')).toContainText(
+			'music-vote performance',
+		)
+		await stage.getByRole('button', { name: 'Hide code' }).click()
+		await expect(stage.getByTestId('dance-visual')).toBeVisible()
+		await stage.getByRole('button', { name: 'Exit performance' }).click()
+		await expect(stage).toHaveCount(0)
+		await expect(host.getByTestId('groove-lock')).toHaveAttribute(
+			'aria-pressed',
+			'true',
+		)
+		await host.getByTestId('groove-lock').click()
+		await expect(host.getByTestId('groove-lock')).toHaveAttribute(
+			'aria-pressed',
+			'false',
+		)
+
 		await host.getByTestId('end-room').click()
 		await expect(host.getByTestId('room-status')).toHaveText('outro', {
 			timeout: 30_000,

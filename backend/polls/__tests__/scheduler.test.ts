@@ -452,3 +452,57 @@ test('ending during generation rejects the late crowd result', async () => {
 	).toBe(0)
 	expect((await updates(room.id))[0]!.deliveryStatus).toBe('failed')
 })
+
+test('groove lock keeps collecting answers and release submits the latest mix', async () => {
+	const room = await makeRoom()
+	await boot(room.id)
+	await service.setGrooveLock(room.id, room.hostId, true)
+	await answer(room.questions[0]!.id, 'intense')
+	await advance(10_000)
+	expect(generate).not.toHaveBeenCalled()
+	await answer(room.questions[0]!.id, 'balanced')
+	await service.setGrooveLock(room.id, room.hostId, false)
+	await advance(10_000)
+	expect(generate).toHaveBeenCalledTimes(1)
+	const snapshot = generate.mock.calls[0]![2] as CrowdSnapshot
+	expect(snapshot[0]!.counts.balanced).toBe(1)
+	expect(snapshot[0]!.counts.intense).toBe(0)
+})
+
+test('locking during generation prevents its late result even after release', async () => {
+	let finish!: (value: { code: string }) => void
+	generate.mockImplementationOnce(
+		() =>
+			new Promise((resolve) => {
+				finish = resolve
+			}),
+	)
+	const room = await makeRoom()
+	await answer(room.questions[0]!.id)
+	await boot(room.id)
+	await advance(10_000)
+	await service.setGrooveLock(room.id, room.hostId, true)
+	await service.setGrooveLock(room.id, room.hostId, false)
+	finish({ code: 's("bd sd")' })
+	await settle()
+	expect(
+		await prisma.patternVersion.count({
+			where: { roomId: room.id, status: 'candidate' },
+		}),
+	).toBe(0)
+})
+
+test('performance candidate blocks crowd generation until host confirms it', async () => {
+	const room = await makeRoom()
+	await boot(room.id)
+	await answer(room.questions[0]!.id)
+	await service.perform(room.id, room.hostId, 'build')
+	await advance(10_000)
+	expect(generate).not.toHaveBeenCalled()
+	const version = await prisma.patternVersion.findFirstOrThrow({
+		where: { roomId: room.id, status: 'candidate' },
+	})
+	await service.reportApplyResult(room.id, room.hostId, version.id, true)
+	await advance(10_000)
+	expect(generate).toHaveBeenCalledTimes(1)
+})

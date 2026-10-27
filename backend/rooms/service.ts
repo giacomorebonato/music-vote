@@ -1,11 +1,13 @@
 import { prisma } from '@backend/db/client'
 import { getLlmProvider } from '@backend/llm/provider'
 import { generateInitialPattern, generateOutro } from '@backend/music/engine'
+import { performancePattern } from '@backend/music/performance'
 import type { StateDoc } from '@backend/music/state-doc'
 import { armScheduler, disarmScheduler } from '@backend/polls/scheduler'
 import { hub } from '@backend/realtime/hub'
 import { preferenceQuestions } from '@shared/schemas/preferences'
 import type { createRoomSchema } from '@shared/schemas/room'
+import type { performanceActionSchema } from '@shared/schemas/room'
 import type { z } from 'zod'
 import type { Prisma, Room } from '../../prisma/generated/client'
 
@@ -19,6 +21,87 @@ type EngineDeps = {
 const defaultEngine: EngineDeps = {
 	generateInitialPattern,
 	generateOutro,
+}
+
+export async function setGrooveLock(
+	roomId: string,
+	hostId: string,
+	locked: boolean,
+): Promise<void> {
+	await prisma.$transaction(async (tx) => {
+		const changed = await tx.room.updateMany({
+			where: { id: roomId, hostId, status: 'live' },
+			data: { grooveLocked: locked },
+		})
+		if (!changed.count) throw new Error('Live room not found or access denied')
+		if (locked) {
+			await tx.poll.updateMany({
+				where: { roomId, deliveryStatus: 'preparing' },
+				data: { deliveryStatus: 'failed', resolvedAt: new Date() },
+			})
+			await tx.patternVersion.updateMany({
+				where: { roomId, status: 'candidate' },
+				data: { status: 'rejected' },
+			})
+		}
+	})
+	hub.publishHost(roomId, { type: 'crowd_changed' })
+}
+
+export async function perform(
+	roomId: string,
+	hostId: string,
+	action: z.infer<typeof performanceActionSchema>['action'],
+): Promise<void> {
+	const version = await prisma.$transaction(async (tx) => {
+		const room = await tx.room.findUnique({ where: { id: roomId } })
+		if (
+			!room ||
+			room.hostId !== hostId ||
+			room.status !== 'live' ||
+			!room.currentCode
+		)
+			throw new Error('Live room not found or access denied')
+		const pending = await tx.poll.findFirst({
+			where: { roomId, deliveryStatus: 'preparing' },
+		})
+		if (pending)
+			throw new Error('Wait for the current musical change to finish')
+		const latest = await tx.poll.findFirst({
+			where: { roomId },
+			orderBy: { seq: 'desc' },
+		})
+		const update = await tx.poll.create({
+			data: {
+				roomId,
+				seq: (latest?.seq ?? 0) + 1,
+				kind: 'performance',
+				question: action,
+				options: [],
+				status: 'closed',
+				deliveryStatus: 'preparing',
+				closedAt: new Date(),
+			},
+		})
+		return tx.patternVersion.create({
+			data: {
+				roomId,
+				code: performancePattern(room.currentCode, action),
+				source: update.id,
+				baseVersionId: room.currentVersionId,
+				status: 'candidate',
+				stateDoc: room.stateDoc as Prisma.InputJsonObject,
+			},
+		})
+	})
+	hub.publishHost(roomId, {
+		type: 'code_update',
+		code: version.code,
+		versionId: version.id,
+		kind: 'evolution',
+		phraseAligned: true,
+	})
+	hub.publishHost(roomId, { type: 'crowd_changed' })
 }
 
 export async function createRoom(

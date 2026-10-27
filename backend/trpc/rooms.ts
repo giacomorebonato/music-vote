@@ -5,10 +5,16 @@ import {
 	skipPoll,
 	startRoom,
 	undoLastChange,
+	perform,
+	setGrooveLock,
 } from '@backend/rooms/service'
 import type { Context } from '@backend/trpc/context'
 import { parseOptions } from '@backend/votes/service'
-import { createRoomSchema } from '@shared/schemas/room'
+import {
+	createRoomSchema,
+	performanceActionSchema,
+	grooveLockSchema,
+} from '@shared/schemas/room'
 import { initTRPC, TRPCError } from '@trpc/server'
 import { z } from 'zod'
 
@@ -34,6 +40,18 @@ async function requireRoomOwner(
 }
 
 export const roomsRouter = t.router({
+	perform: protectedProcedure
+		.input(performanceActionSchema)
+		.mutation(async ({ ctx, input }) => {
+			await requireRoomOwner(ctx.prisma, input.roomId, ctx.userId)
+			await perform(input.roomId, ctx.userId, input.action)
+		}),
+	lock: protectedProcedure
+		.input(grooveLockSchema)
+		.mutation(async ({ ctx, input }) => {
+			await requireRoomOwner(ctx.prisma, input.roomId, ctx.userId)
+			await setGrooveLock(input.roomId, ctx.userId, input.locked)
+		}),
 	create: protectedProcedure
 		.input(createRoomSchema)
 		.mutation(async ({ ctx, input }) => {

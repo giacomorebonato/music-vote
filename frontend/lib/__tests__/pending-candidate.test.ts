@@ -72,3 +72,16 @@ test('skips initial versions and non-candidate statuses', () => {
 test('returns null with no versions at all', () => {
 	expect(pickPendingCandidate([], 'live')).toBeNull()
 })
+
+test('reconnecting performance candidates retain phrase scheduling', () => {
+	expect(
+		pickPendingCandidate(
+			[
+				row({
+					code: '// music-vote performance\nall(x => x.lpf(500))\ns("bd")',
+				}),
+			],
+			'live',
+		)?.phraseAligned,
+	).toBe(true)
+})

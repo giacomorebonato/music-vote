@@ -157,6 +157,7 @@ async function checkCrowd(scheduler: Scheduler): Promise<void> {
 		else return
 	}
 	if (scheduler.generating) return
+	if (room.grooveLocked) return
 	// Personal selections are deliberately excluded from snapshots and model prompts.
 	const snapshot: CrowdSnapshot = (await readCrowdQuestions(room.id)).map(
 		({ choice: _choice, ...question }) => question,
@@ -225,6 +226,7 @@ async function prepareUpdate(
 		if (
 			active.get(room.id) !== scheduler ||
 			fresh?.status !== 'live' ||
+			fresh.grooveLocked ||
 			fresh.currentVersionId !== room.currentVersionId ||
 			update?.deliveryStatus !== 'preparing'
 		)

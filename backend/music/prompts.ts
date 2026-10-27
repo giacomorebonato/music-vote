@@ -1,45 +1,11 @@
+import { demoDrums, demoSynths } from '@shared/schemas/music'
 import type { MusicParams, StateDoc } from '@backend/music/state-doc'
 
 // Sound names the loaded dirt-samples bank actually resolves. The model is
 // told to stay inside this set (compileCheck rejects unknown names, which
 // costs a retry): `oh` (the classic Tidal open hat) is NOT in this bank —
 // the open-hat names here are `ho` and `808oh`.
-export const SOUND_HINTS = [
-	'bd',
-	'sd',
-	'cp',
-	'hh',
-	'hh27',
-	'ho',
-	'808oh',
-	'rm',
-	'rs',
-	'cr',
-	'ht',
-	'amencutup',
-	'clak',
-	'click',
-	'gretsch',
-	'808',
-	'casio',
-	'jazz',
-	'jungle',
-	'bass0',
-	'bass1',
-	'bassdm',
-	'jvbass',
-	'sitar',
-	'pluck',
-	'pad',
-	'stab',
-	'sawtooth',
-	'square',
-	'sine',
-	'triangle',
-	'saw',
-	'sqr',
-	'supersaw',
-]
+export const SOUND_HINTS = [...demoDrums, ...demoSynths]
 
 // Short, real Strudel snippets shown to the model as style anchors.
 export const FEW_SHOTS = [
@@ -47,6 +13,12 @@ export const FEW_SHOTS = [
 	's("bd*2 [~ sd] cp [hh hh]").gain(0.9)',
 	'note("c2 ~ eb2 g2").s("sawtooth").lpf(600).gain(0.7)',
 	'setcps(0.5)\nn("0 3 7 10").scale("C:minor").s("triangle").delay(0.4)',
+]
+
+const genreAnchors = [
+	'House/disco: stack(s("bd*4").gain(0.65), s("~ cp ~ cp").gain(0.3), s("[~ hh]*4").gain(0.18), note("<c2 c2 eb2 f2>*4").s("sawtooth").lpf(700).decay(0.15).sustain(0).gain(0.28), note("<c4 eb4 g4 bb4>").s("triangle").gain(0.16))',
+	'Techno: stack(s("bd*4").gain(0.7), s("[~ hh]*4").gain(0.16), s("~ sd ~ sd").gain(0.22), note("c2 [~ c2] eb2 ~").s("sawtooth").lpf(500).decay(0.12).sustain(0).gain(0.28), note("<g4 ~ bb4 eb4>").s("square").lpf(1600).gain(0.08))',
+	'Funk/breakbeat: stack(s("bd ~ [~ bd] ~, ~ sd ~ sd").gain(0.5), s("hh*8").gain(0.12), note("c2 ~ eb2 [g2 bb1]").s("triangle").decay(0.2).sustain(0).gain(0.4), note("<eb4 g4 bb4 g4>").s("sine").gain(0.14))',
 ]
 
 // The provider strips markdown fences, but only for a single, well-formed
@@ -71,6 +43,7 @@ function soundsBlock(): string {
 		'AVAILABLE SOUNDS (use ONLY these names in s(...) — any other sound is not loaded and will throw):',
 		SOUND_HINTS.join(' '),
 		'(no `oh` sample exists; use `ho` for open hats)',
+		'Use sample index 0 only. Use synthesized notes for bass, melody and chords. This palette is preloaded.',
 	].join('\n')
 }
 
@@ -109,7 +82,9 @@ export function buildInitialPatternPrompt(params: MusicParams): string {
 	return [
 		`Write the opening Strudel pattern for a live ${params.genre} set at ${params.bpm} BPM.`,
 		`Start with setcps(${bpmToCps(params.bpm)}) so one cycle is one bar (4 beats) at ${params.bpm} BPM.`,
-		'Build a loopable groove: drums plus the bass, melody or harmony this genre needs. Keep it playable on its own for minutes.',
+		'Build a danceable, complete opening: a confident kick, offbeat hats, syncopated bass and a short memorable hook. Balance gains so layers have headroom. Use rests and a four-bar variation; avoid an unchanging exercise loop. Keep it playable on its own for minutes.',
+		'Choose the closest genre anchor below, preserve its musical structure and adapt the notes and rhythm. All layers must share the same tempo. Do not use all(), each(), setcpm(), or tempo changes.',
+		...genreAnchors,
 		'',
 		fewShotsBlock(),
 		'',
@@ -197,7 +172,9 @@ export function buildCrowdPrompt(
 		'Previous applied crowd preferences:',
 		JSON.stringify(doc.crowdHistory?.at(-1)?.snapshot ?? null),
 		'There is no winner, majority decision, or required winning option. Interpret the entire distribution, including minority preferences and unanswered questions.',
-		'These are desired musical states, not repeated requests to increase or decrease anything. Keep a coherent groove, preserve the tempo and recognizable motifs, and make at most one gentle musical adjustment.',
+		'These are desired musical states, not repeated requests to increase or decrease anything. Preserve the tempo and recognizable motifs. When the distribution changes substantially, make one clearly audible, coherent transition; small shifts need only a subtle adjustment.',
+		'Energy: mellow means sparse percussion and softer bass; balanced means a steady dance groove; intense means a firm kick, driving bass and open hats, with gain headroom. Rhythm: steady means a simple pulse; flowing means syncopation; busy means denser percussion with rests. Mood: dark means minor harmony and muted timbre; warm means rounded bass and soft chords; bright means a higher hook and open filters. Blend the whole distribution.',
+		'Remove any music-vote performance comment and all() performance transformation before composing the next crowd update. Do not change tempo or add all()/each() transforms.',
 		'If the groove already fits this mix, return exactly HOLD. Otherwise return the complete updated Strudel pattern.',
 		fewShotsBlock(),
 		soundsBlock(),

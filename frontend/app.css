@@ -79,3 +79,14 @@ h3,
 	background-color: color-mix(in oklch, var(--color-base-100) 88%, transparent);
 	backdrop-filter: saturate(140%) blur(8px);
 }
+
+.performance-stage {
+	position: fixed;
+	inset: 0;
+	z-index: 60;
+	display: flex;
+	flex-direction: column;
+	overflow: auto;
+	color: #f8f4ff;
+	background: radial-gradient(ellipse at 40% 35%, #37134d 0%, #100b21 65%);
+}

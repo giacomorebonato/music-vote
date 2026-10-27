@@ -14,7 +14,7 @@ const evaluate = mock(() => Promise.resolve(undefined as unknown))
 const samples = mock(() => Promise.resolve())
 const loadBuffer = mock(() => Promise.resolve())
 const getAudioContext = mock((): AudioContext | null => null)
-const getSound = mock(() => null)
+const getSound = mock((_name: string) => null)
 const getSampleInfo = mock(() => ({
 	url: 'https://example.com/sample.wav',
 	label: 'bd:0',
@@ -173,4 +173,42 @@ test('playback observers receive the existing scheduler and can unsubscribe', as
 	}
 	options.onUpdateState({ ...playbackState, started: true })
 	expect(listener).toHaveBeenCalledTimes(1)
+})
+
+test('demo readiness exposes missing samples and retries the whole palette', async () => {
+	const { prepareDemoAudio } = await import('@frontend/audio/strudel-init')
+	const options = initStrudel.mock.calls[0]?.[0] as {
+		prebake: () => Promise<void>
+	}
+	getAudioContext.mockImplementation(() => audioContextFake('running'))
+	getSound.mockImplementation(() => ({ data: { samples: {} } }) as never)
+	loadBuffer.mockRejectedValueOnce(new Error('offline'))
+	await options.prebake()
+	// Keep one sound unavailable on the explicit retry, too.
+	loadBuffer.mockRejectedValueOnce(new Error('offline'))
+	expect(await prepareDemoAudio()).toEqual(['bd'])
+	expect(await prepareDemoAudio()).toEqual([])
+	expect(getSound.mock.calls.slice(-5).map((call) => call[0])).toEqual([
+		'bd',
+		'sd',
+		'cp',
+		'hh',
+		'ho',
+	])
+})
+
+test('phrase scheduling uses the playing clock and can be cancelled', async () => {
+	const { waitForPhrase } = await import('@frontend/audio/strudel-init')
+	const options = initStrudel.mock.calls[0]?.[0] as {
+		onUpdateState: (state: typeof playbackState) => void
+	}
+	options.onUpdateState({ ...playbackState, started: true })
+	let cycle = 1
+	scheduler.now = () => cycle
+	const wait = waitForPhrase(() => false)
+	cycle = 4
+	expect(await wait).toBe(true)
+	cycle = 5
+	expect(await waitForPhrase(() => true)).toBe(false)
+	options.onUpdateState({ ...playbackState, started: false })
 })

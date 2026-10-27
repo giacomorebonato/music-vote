@@ -1,3 +1,5 @@
+import { AudioReadiness } from '@frontend/components/audio-readiness'
+import { PerformanceStage } from '@frontend/components/performance-stage'
 import type { ApplyResult } from '@frontend/audio/strudel-init'
 import { resumeAudio } from '@frontend/audio/strudel-init'
 import {
@@ -74,6 +76,19 @@ function HostConsole({ roomId }: { roomId: string }) {
 	const [applyStatusState, setApplyStatusState] = useState(
 		initialApplyStatusState,
 	)
+	const [performanceMode, setPerformanceMode] = useState(false)
+	const closePerformance = useCallback(() => {
+		setPerformanceMode(false)
+		if (document.fullscreenElement)
+			void document.exitFullscreen().catch(() => {})
+	}, [])
+	useEffect(() => {
+		const changed = () => {
+			if (!document.fullscreenElement) setPerformanceMode(false)
+		}
+		document.addEventListener('fullscreenchange', changed)
+		return () => document.removeEventListener('fullscreenchange', changed)
+	}, [])
 	const [toast, setToast] = useState<string | null>(null)
 	// True when the AudioContext is suspended (browser autoplay policy) —
 	// set from `applyPattern` results, cleared by the unlock effect below.
@@ -92,6 +107,8 @@ function HostConsole({ roomId }: { roomId: string }) {
 	const applySeqRef = useRef(0)
 	const pendingUndoSeqRef = useRef<number | null>(null)
 
+	const perform = useMutation(trpc.rooms.perform.mutationOptions())
+	const lockGroove = useMutation(trpc.rooms.lock.mutationOptions())
 	const startRoom = useMutation(trpc.rooms.start.mutationOptions())
 	const undoChange = useMutation(trpc.rooms.undo.mutationOptions())
 	const endRoom = useMutation(trpc.rooms.end.mutationOptions())
@@ -186,6 +203,10 @@ function HostConsole({ roomId }: { roomId: string }) {
 					error: result.ok ? undefined : result.error,
 				},
 				{
+					onSuccess: () => {
+						void refetchRoom()
+						void refetchCrowd()
+					},
 					onError: (error) => {
 						// The confirmation never reached the server: unblock the
 						// reconcile retry so a later refetch can confirm it.
@@ -202,7 +223,7 @@ function HostConsole({ roomId }: { roomId: string }) {
 				},
 			)
 		},
-		[refetchRoom, reportApplyResult, roomId, showToast],
+		[refetchRoom, refetchCrowd, reportApplyResult, roomId, showToast],
 	)
 
 	/**
@@ -225,6 +246,10 @@ function HostConsole({ roomId }: { roomId: string }) {
 		(event: CodeUpdateEvent) => {
 			const player = playerRef.current
 			if (!player) return
+			if (event.kind === 'evolution' || event.kind === 'outro') {
+				if (attemptedCandidateRef.current.has(event.versionId)) return
+				attemptedCandidateRef.current.add(event.versionId)
+			}
 			// Start publishes `initial` while the seed effect may already be
 			// applying the same code from the refetched room; skip the duplicate.
 			if (event.kind === 'initial' && appliedCodeRef.current === event.code) {
@@ -239,7 +264,7 @@ function HostConsole({ roomId }: { roomId: string }) {
 					? { type: 'reverted', seq }
 					: { type: 'applied', seq }
 			void player
-				.applyPattern(event.code)
+				.applyPattern(event.code, event.phraseAligned)
 				.then((result) => {
 					if (result.ok) {
 						setAudioBlocked(!result.audioRunning)
@@ -327,7 +352,11 @@ function HostConsole({ roomId }: { roomId: string }) {
 					trpc.rooms.get.queryOptions({ roomId }),
 				)
 				const pending = pickPendingCandidate(fresh.versions, fresh.room.status)
-				const code = pending?.code ?? fresh.room.currentCode
+				if (pending) {
+					handleCodeUpdate(pending)
+					return
+				}
+				const code = fresh.room.currentCode
 				if (code === null) return
 				appliedCodeRef.current = code
 				setDisplayCode(code)
@@ -335,27 +364,6 @@ function HostConsole({ roomId }: { roomId: string }) {
 				if (result) {
 					if (result.ok) setAudioBlocked(!result.audioRunning)
 					else showToast(`Audio error: ${result.error}`)
-				}
-				if (pending && result) {
-					if (attemptedCandidateRef.current.has(pending.versionId)) return
-					attemptedCandidateRef.current.add(pending.versionId)
-					if (result.ok && !result.audioRunning) {
-						pendingAudioApplyRef.current = pending
-						return
-					}
-					reportApplyResult.mutate(
-						{
-							roomId,
-							versionId: pending.versionId,
-							ok: result.ok,
-							error: result.ok ? undefined : result.error,
-						},
-						{
-							onError: () => {
-								attemptedCandidateRef.current.delete(pending.versionId)
-							},
-						},
-					)
 				}
 			} catch (error) {
 				showToast(
@@ -365,7 +373,7 @@ function HostConsole({ roomId }: { roomId: string }) {
 				)
 			}
 		})()
-	}, [queryClient, refetchCrowd, reportApplyResult, roomId, showToast, trpc])
+	}, [queryClient, refetchCrowd, handleCodeUpdate, roomId, showToast, trpc])
 
 	// One-shot unlock while audio is blocked: browsers only restore a suspended
 	// AudioContext from a user activation, and Strudel's own hook listens for
@@ -406,13 +414,14 @@ function HostConsole({ roomId }: { roomId: string }) {
 	useEffect(() => {
 		if (!pendingCandidate) return
 		if (attemptedCandidateRef.current.has(pendingCandidate.versionId)) return
-		attemptedCandidateRef.current.add(pendingCandidate.versionId)
 		handleCodeUpdate(pendingCandidate)
 	}, [pendingCandidate, handleCodeUpdate])
 
 	const voteUrl =
 		typeof window === 'undefined' ? '' : `${window.location.origin}/r/${roomId}`
 	const mutationError =
+		perform.error ??
+		lockGroove.error ??
 		startRoom.error ??
 		undoChange.error ??
 		endRoom.error ??
@@ -449,9 +458,80 @@ function HostConsole({ roomId }: { roomId: string }) {
 		)
 	}
 
+	const changing =
+		perform.isPending ||
+		lockGroove.isPending ||
+		pendingCandidate !== null ||
+		crowdQuery.data?.deliveryStatus === 'preparing'
+	const performanceControls = (
+		<>
+			{(['build', 'drop', 'strip'] as const).map((action) => (
+				<button
+					key={action}
+					type="button"
+					data-testid={`perform-${action}`}
+					className={`btn ${action === 'drop' ? 'btn-secondary' : 'btn-outline'}`}
+					disabled={room.status !== 'live' || changing}
+					onClick={() => {
+						perform.mutate({ roomId, action }, mutationOptionsFor())
+					}}
+				>
+					{action === 'build'
+						? 'Build up'
+						: action === 'drop'
+							? 'Drop'
+							: 'Strip back'}
+				</button>
+			))}
+			<button
+				type="button"
+				className={`btn ${room.grooveLocked ? 'btn-accent' : 'btn-outline'}`}
+				data-testid="groove-lock"
+				aria-pressed={room.grooveLocked}
+				disabled={room.status !== 'live' || changing}
+				onClick={() => {
+					lockGroove.mutate(
+						{ roomId, locked: !room.grooveLocked },
+						mutationOptionsFor(),
+					)
+				}}
+			>
+				{room.grooveLocked ? 'Release groove' : 'Lock this groove'}
+			</button>
+			<span className="text-sm opacity-70" role="status">
+				{changing
+					? pendingCandidate?.phraseAligned || perform.isPending
+						? 'Queued for the next four-bar phrase'
+						: 'Listening to the crowd…'
+					: room.grooveLocked
+						? 'Groove locked · audience can keep voting'
+						: 'Crowd is shaping the music'}
+			</span>
+		</>
+	)
+
 	return (
 		<AppLayout>
-			<div className="flex max-w-3xl flex-col gap-6">
+			{performanceMode ? (
+				<PerformanceStage
+					genre={room.genre}
+					bpm={room.bpm}
+					voteUrl={voteUrl}
+					questions={crowdQuery.data?.questions ?? []}
+					code={displayCode}
+					controls={
+						<>
+							{performanceControls}
+							{mutationError ? (
+								<span role="alert">{mutationError.message}</span>
+							) : null}
+							{toast ? <span role="alert">{toast}</span> : null}
+						</>
+					}
+					onClose={closePerformance}
+				/>
+			) : null}
+			<div inert={performanceMode} className="flex max-w-3xl flex-col gap-6">
 				<div className="flex flex-wrap items-start justify-between gap-2">
 					<div className="flex flex-col gap-1">
 						<span className="eyebrow">host console</span>
@@ -476,6 +556,21 @@ function HostConsole({ roomId }: { roomId: string }) {
 					</div>
 				</div>
 
+				<AudioReadiness />
+				<button
+					type="button"
+					className="btn btn-secondary self-start"
+					data-testid="open-performance"
+					onClick={() => {
+						setPerformanceMode(true)
+						void document.documentElement.requestFullscreen?.().catch(() => {})
+					}}
+				>
+					Performance view
+				</button>
+				<div className="flex flex-wrap items-center gap-2">
+					{performanceControls}
+				</div>
 				{room.status === 'ended' ? (
 					<div className="alert" data-testid="room-ended">
 						<span>Set finished — playback stopped.</span>

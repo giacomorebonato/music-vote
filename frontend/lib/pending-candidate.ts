@@ -35,5 +35,8 @@ export function pickPendingCandidate(
 		code: pending.code,
 		versionId: pending.id,
 		kind: pending.source === 'outro' ? 'outro' : 'evolution',
+		...(pending.code.startsWith('// music-vote performance\n')
+			? { phraseAligned: true }
+			: {}),
 	}
 }
