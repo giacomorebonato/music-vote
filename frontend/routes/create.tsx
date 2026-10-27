@@ -6,6 +6,95 @@ import { useForm } from '@tanstack/react-form'
 import { useMutation } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
 
+const genreGroups = [
+	{
+		label: 'Electronic & dance',
+		genres: [
+			'Acid house',
+			'Ambient',
+			'Breakbeat',
+			'Deep house',
+			'Disco',
+			'Downtempo',
+			'Drum and bass',
+			'Dubstep',
+			'EDM',
+			'Electro',
+			'Garage',
+			'House',
+			'IDM',
+			'Jungle',
+			'Minimal techno',
+			'Progressive house',
+			'Synthwave',
+			'Tech house',
+			'Techno',
+			'Trance',
+			'Trip-hop',
+		],
+	},
+	{
+		label: 'Hip-hop, R&B & soul',
+		genres: [
+			'Boom bap',
+			'Funk',
+			'Hip-hop',
+			'Lo-fi hip-hop',
+			'Neo-soul',
+			'R&B',
+			'Soul',
+			'Trap',
+		],
+	},
+	{
+		label: 'Pop, rock & alternative',
+		genres: [
+			'Alternative rock',
+			'Dream pop',
+			'Electropop',
+			'Heavy metal',
+			'Indie pop',
+			'Indie rock',
+			'Pop',
+			'Psychedelic rock',
+			'Punk rock',
+			'Rock',
+			'Synth-pop',
+		],
+	},
+	{
+		label: 'Jazz, blues & acoustic',
+		genres: [
+			'Blues',
+			'Classical',
+			'Country',
+			'Folk',
+			'Jazz',
+			'Jazz fusion',
+			'Smooth jazz',
+			'Swing',
+		],
+	},
+	{
+		label: 'Latin, Caribbean & global',
+		genres: [
+			'Afrobeat',
+			'Afrobeats',
+			'Amapiano',
+			'Bachata',
+			'Bossa nova',
+			'Dancehall',
+			'Dub',
+			'Flamenco',
+			'Latin pop',
+			'Reggae',
+			'Reggaeton',
+			'Salsa',
+			'Samba',
+		],
+	},
+]
+
 export function CreateRoute() {
 	const trpc = useTRPC()
 	const navigate = useNavigate()
@@ -77,13 +166,22 @@ export function CreateRoute() {
 						{(field) => (
 							<label className="form-control flex flex-col gap-1">
 								<span className="label-text">Genre</span>
-								<input
-									className="input input-bordered w-full"
-									placeholder="house"
+								<select
+									className="select select-bordered w-full"
 									value={field.state.value}
 									onBlur={field.handleBlur}
 									onChange={(event) => field.handleChange(event.target.value)}
-								/>
+								>
+									{genreGroups.map((group) => (
+										<optgroup key={group.label} label={group.label}>
+											{group.genres.map((genre) => (
+												<option key={genre} value={genre.toLowerCase()}>
+													{genre}
+												</option>
+											))}
+										</optgroup>
+									))}
+								</select>
 							</label>
 						)}
 					</form.Field>
