@@ -1,3 +1,5 @@
+import { readCrowdQuestions } from '@backend/votes/preferences'
+import { preferenceAnswerSchema } from '@shared/schemas/preferences'
 import type { Context } from '@backend/trpc/context'
 import { castVote, claimSession, parseOptions } from '@backend/votes/service'
 import { initTRPC, TRPCError } from '@trpc/server'
@@ -16,6 +18,31 @@ const SESSION_MAX_AGE_SECS = 60 * 60 * 24
  * vote page and ended-summary need.
  */
 export const votingRouter = t.router({
+	crowd: t.procedure
+		.input(z.object({ roomId: z.string() }))
+		.query(async ({ ctx, input }) => {
+			const room = await ctx.prisma.room.findUnique({
+				where: { id: input.roomId },
+				select: { status: true },
+			})
+			if (!room)
+				throw new TRPCError({ code: 'NOT_FOUND', message: 'Room not found' })
+			const token = readSessionToken(ctx.req.headers.get('cookie'))
+			const [questions, latest] = await Promise.all([
+				readCrowdQuestions(input.roomId, token),
+				ctx.prisma.poll.findFirst({
+					where: { roomId: input.roomId, kind: 'crowd' },
+					orderBy: { seq: 'desc' },
+					select: { deliveryStatus: true },
+				}),
+			])
+			return {
+				roomStatus: room.status,
+				questions,
+				deliveryStatus: latest?.deliveryStatus ?? null,
+			}
+		}),
+
 	claimSession: t.procedure.mutation(({ ctx }) => {
 		const existing = readSessionToken(ctx.req.headers.get('cookie'))
 		if (existing) return { token: existing }
@@ -112,7 +139,7 @@ export const votingRouter = t.router({
 		}),
 
 	castVote: t.procedure
-		.input(z.object({ pollId: z.string(), choice: z.string() }))
+		.input(preferenceAnswerSchema)
 		.mutation(async ({ ctx, input }) => {
 			const token = readSessionToken(ctx.req.headers.get('cookie'))
 			if (!token) {

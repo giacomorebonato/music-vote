@@ -38,7 +38,7 @@ Run the gate (`bun run verify`) — or `bun run test --parallel` — for unit te
 - `LLM_PROVIDER` / `OLLAMA_BASE_URL` / `OLLAMA_MODEL` / `OLLAMA_API_KEY` / `LLM_MOCK_SCRIPT` — LLM provider config; prod deploy + ops notes in [music-vote.md](music-vote.md)
 - SSR prerender (optional, prod-only): `SSR_CACHE_DIR`, `LIGHTPANDA_EXECUTABLE_PATH` — see [bot-ssr.md](bot-ssr.md)
 
-`NODE_ENV` and `REACT_COMPILER` come from the scripts/Dockerfile rather than `.env`; `MV_E2E_FAST` is test-only (set by `playwright.config.ts`); `MV_TEST_INTERVAL_SECS` (compresses room poll intervals down) and `MV_TEST_POLL_OPEN_SECS` (overrides the per-room poll open window) are dev-only global escape hatches — the normal way to test with fast timings is the create-room form (`pollIntervalSec` floor 5s, `pollOpenSec` floor 15s, see `backend/polls/scheduler.ts`).
+`NODE_ENV` and `REACT_COMPILER` come from the scripts/Dockerfile rather than `.env`. Crowd preferences are checked every 10 seconds in every environment. The former `MV_E2E_FAST`, `MV_TEST_INTERVAL_SECS`, and `MV_TEST_POLL_OPEN_SECS` poll timing overrides are retired.
 
 ## Git hooks
 

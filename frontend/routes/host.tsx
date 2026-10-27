@@ -62,23 +62,18 @@ function HostConsole({ roomId }: { roomId: string }) {
 
 	const roomQuery = useQuery(trpc.rooms.get.queryOptions({ roomId }))
 	const room = roomQuery.data?.room
-	const openPoll = roomQuery.data?.openPoll
-	const serverCounts = roomQuery.data?.voteCounts
+	const crowdQuery = useQuery({
+		...trpc.voting.crowd.queryOptions({ roomId }),
+		refetchInterval: 10_000,
+	})
+	const refetchCrowd = crowdQuery.refetch
 
 	const [playerCode, setPlayerCode] = useState<string | null>(null)
 	const [displayCode, setDisplayCode] = useState<string | null>(null)
 	const [applyStatusState, setApplyStatusState] = useState(
 		initialApplyStatusState,
 	)
-	const [voteTally, setVoteTally] = useState<{
-		pollId: string
-		counts: Record<string, number>
-	} | null>(null)
 	const [toast, setToast] = useState<string | null>(null)
-	// Set while the backend turns a winning poll vote into a new pattern (an
-	// evolution `code_update` frame): the model call is seconds-long and the host
-	// should see that work instead of a silent gap.
-	const [pendingEvolution, setPendingEvolution] = useState(false)
 	// True when the AudioContext is suspended (browser autoplay policy) —
 	// set from `applyPattern` results, cleared by the unlock effect below.
 	const [audioBlocked, setAudioBlocked] = useState(false)
@@ -98,7 +93,6 @@ function HostConsole({ roomId }: { roomId: string }) {
 
 	const startRoom = useMutation(trpc.rooms.start.mutationOptions())
 	const undoChange = useMutation(trpc.rooms.undo.mutationOptions())
-	const skipPoll = useMutation(trpc.rooms.skip.mutationOptions())
 	const endRoom = useMutation(trpc.rooms.end.mutationOptions())
 	const reportApplyResult = useMutation(
 		trpc.rooms.reportApplyResult.mutationOptions(),
@@ -280,40 +274,17 @@ function HostConsole({ roomId }: { roomId: string }) {
 		(event: WsEvent) => {
 			switch (event.type) {
 				case 'code_update':
-					setPendingEvolution(false)
 					handleCodeUpdate(event)
 					break
-				case 'vote_count':
-					setVoteTally({ pollId: event.pollId, counts: event.counts })
-					break
-				case 'poll_opened':
-					// A follow-up poll is up, so nothing is being generated anymore.
-					setPendingEvolution(false)
-					// Refetch rather than using the payload: the event carries option
-					// labels (no keys) and no zero-filled counts, and a poll that opens
-					// with zero votes must still show up on the console.
+				case 'crowd_changed':
+					void refetchCrowd()
 					void refetchRoom()
 					break
-				case 'poll_closed': {
-					// A winning evolution vote starts backend model work; the frame
-					// (or the warning toast) clears the wait. `winningOption` is an
-					// option key: `yes`/`no` marks an evolution poll, `wrap`/`continue`
-					// an end poll, and a skipped/overdue close has no winner — none of
-					// those generate a pattern, so no indicator for them.
-					const { winningOption } = event
-					setPendingEvolution(
-						winningOption !== null &&
-							winningOption !== 'continue' &&
-							winningOption !== 'wrap',
-					)
-					// Refetch rather than using the payload: the event carries option
-					// labels (no keys) and no zero-filled counts, and a poll that opens
-					// with zero votes must still show up on the console.
+				case 'music_result':
+					void refetchCrowd()
 					void refetchRoom()
 					break
-				}
 				case 'warning':
-					setPendingEvolution(false)
 					showToast(event.message)
 					break
 				case 'pattern_rejected':
@@ -326,14 +297,19 @@ function HostConsole({ roomId }: { roomId: string }) {
 					})
 					break
 				case 'room_status':
-					setPendingEvolution(false)
 					void refetchRoom()
 					break
 				default:
 					break
 			}
 		},
-		[dispatchApplyStatus, handleCodeUpdate, refetchRoom, showToast],
+		[
+			dispatchApplyStatus,
+			handleCodeUpdate,
+			refetchRoom,
+			refetchCrowd,
+			showToast,
+		],
 	)
 
 	// Spec "Host WS drop": the browser is the audio engine, so a dropped socket
@@ -342,9 +318,8 @@ function HostConsole({ roomId }: { roomId: string }) {
 	// WS frames publishing it may have been lost while offline) — and confirm
 	// it so the server advances `currentCode`.
 	const handleReconnect = useCallback(() => {
-		// No way to learn whether a generation was mid-flight while offline; a
-		// stale indicator is worse than a missed one, so drop it on resync.
-		setPendingEvolution(false)
+		// Recover both the preference distribution and authoritative playback state.
+		void refetchCrowd()
 		void (async () => {
 			try {
 				const fresh = await queryClient.fetchQuery(
@@ -436,15 +411,9 @@ function HostConsole({ roomId }: { roomId: string }) {
 
 	const voteUrl =
 		typeof window === 'undefined' ? '' : `${window.location.origin}/r/${roomId}`
-	const pollOptions = openPoll?.options ?? []
-	const counts =
-		voteTally && voteTally.pollId === openPoll?.id
-			? voteTally.counts
-			: (serverCounts ?? {})
 	const mutationError =
 		startRoom.error ??
 		undoChange.error ??
-		skipPoll.error ??
 		endRoom.error ??
 		reportApplyResult.error
 
@@ -489,8 +458,8 @@ function HostConsole({ roomId }: { roomId: string }) {
 							{room.genre} · {room.bpm} BPM
 						</h1>
 						<p className="text-sm opacity-70">
-							{Math.round(room.lengthSec / 60)} min · poll every{' '}
-							{room.pollIntervalSec}s · {room.pollOpenSec}s to vote
+							{Math.round(room.lengthSec / 60)} min · Crowd preferences checked
+							every 10s
 						</p>
 					</div>
 					<div className="flex items-center gap-2">
@@ -602,32 +571,13 @@ function HostConsole({ roomId }: { roomId: string }) {
 							>
 								Undo last change
 							</button>
-							<button
-								type="button"
-								className="btn"
-								data-testid="skip-poll"
-								disabled={skipPoll.isPending}
-								onClick={() => {
-									skipPoll.mutate(
-										{ roomId },
-										{
-											onSuccess: () => {
-												showToast('Poll skipped')
-												void refetchRoom()
-											},
-										},
-									)
-								}}
-							>
-								Skip poll
-							</button>
 						</>
 					) : null}
 
-					{pendingEvolution ? (
+					{crowdQuery.data?.deliveryStatus === 'preparing' ? (
 						<span className="badge badge-ghost" data-testid="evolution-pending">
 							<span className="loading loading-spinner" />
-							Applying poll result…
+							Listening to the crowd…
 						</span>
 					) : null}
 
@@ -666,13 +616,14 @@ function HostConsole({ roomId }: { roomId: string }) {
 					</div>
 				) : null}
 
-				{openPoll && pollOptions.length > 0 ? (
+				{crowdQuery.data?.questions.map((question) => (
 					<PollMonitor
-						question={openPoll.question}
-						options={pollOptions}
-						counts={counts}
+						key={question.id}
+						question={question.question}
+						options={question.options}
+						counts={question.counts}
 					/>
-				) : null}
+				))}
 
 				<details className="collapse-arrow collapse bg-base-200">
 					<summary className="collapse-title font-medium">

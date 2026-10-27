@@ -111,19 +111,18 @@ test('createRoom persists the per-room poll open window', async () => {
 	expect(room.pollOpenSec).toBe(20)
 })
 
-test('startRoom is atomic: question-gen throw leaves room lobby with zero versions', async () => {
+test('startRoom: initial generation failure leaves room lobby with zero versions', async () => {
 	const host = await makeHost()
 	const room = await service.createRoom(host.id, baseInput())
 
 	await expect(
 		service.startRoom(room.id, host.id, {
-			generateInitialPattern,
-			generateNextQuestion: async () => {
-				throw new Error('question generation failed')
+			generateInitialPattern: async () => {
+				throw new Error('initial generation failed')
 			},
 			generateOutro,
 		}),
-	).rejects.toThrow('question generation failed')
+	).rejects.toThrow('initial generation failed')
 
 	const updated = await prisma.room.findUnique({ where: { id: room.id } })
 	expect(updated?.status).toBe('lobby')
@@ -157,14 +156,19 @@ test('startRoom makes room live, applies initial version, sets currentCode, arms
 	expect(versions[0].status).toBe('applied')
 
 	const polls = await prisma.poll.findMany({ where: { roomId: room.id } })
-	expect(polls).toHaveLength(1)
-	expect(polls[0].status).toBe('queued')
-	expect(polls[0].seq).toBe(1)
-	expect(polls[0].question).toBe('Sharper drums or warmer chords?')
-	expect(polls[0].options).toEqual([
-		{ key: 'sharper-drums', label: 'sharper drums' },
-		{ key: 'warmer-chords', label: 'warmer chords' },
-	])
+	expect(polls).toHaveLength(3)
+	expect(
+		polls.every(
+			(poll) =>
+				poll.kind === 'preference' &&
+				poll.status === 'open' &&
+				poll.closesAt === null &&
+				poll.winningOption === null,
+		),
+	).toBe(true)
+	expect(polls.map((poll) => poll.question)).toContain(
+		'What energy feels right?',
+	)
 
 	expect(mockScheduler.mock.calls.length).toBe(1)
 	expect(mockScheduler.mock.calls[0][0]).toBe(room.id)
@@ -242,7 +246,7 @@ test('endRoom while poll open closes poll with null winner and no evolution vers
 	const openPoll = await prisma.poll.create({
 		data: {
 			roomId: room.id,
-			seq: 2,
+			seq: 10,
 			kind: 'evolution',
 			question: 'More drums?',
 			options: [
@@ -302,10 +306,13 @@ test('endRoom from lobby skips outro and ends immediately', async () => {
 		WsEvent,
 	][]
 	const hostEvents = hubSpies.publishHost.mock.calls as [string, WsEvent][]
-	expect(audienceEvents).toHaveLength(1)
-	expect(audienceEvents[0][1]).toEqual({ type: 'room_ended' })
-	expect(hostEvents).toHaveLength(1)
-	expect(hostEvents[0][1]).toEqual({ type: 'room_status', status: 'ended' })
+	expect(
+		audienceEvents.filter(([, event]) => event.type === 'room_ended'),
+	).toHaveLength(1)
+	expect(hostEvents).toContainEqual([
+		room.id,
+		{ type: 'room_status', status: 'ended' },
+	])
 })
 
 test('endRoom on live room goes outro then ended after pollIntervalSec', async () => {
@@ -367,38 +374,19 @@ test('reportApplyResult(false) rejects version', async () => {
 	})
 })
 
-test('skipping a voted poll tells listeners it was skipped', async () => {
+test('legacy skip does not close persistent questions', async () => {
 	const host = await makeHost()
 	const room = await service.createRoom(host.id, baseInput())
 	await service.startRoom(room.id, host.id)
-	const poll = await prisma.poll.findFirstOrThrow({
-		where: { roomId: room.id },
-	})
-	await prisma.poll.update({
-		where: { id: poll.id },
-		data: {
-			status: 'open',
-			openedAt: new Date(),
-			closesAt: new Date(Date.now() + 20_000),
-		},
-	})
-	await prisma.vote.create({
-		data: { pollId: poll.id, sessionToken: 'dancer', choice: 'sharper-drums' },
-	})
 	await service.skipPoll(room.id, host.id)
-	const skipped = await prisma.poll.findUniqueOrThrow({
-		where: { id: poll.id },
-	})
-	expect(skipped.deliveryStatus).toBe('skipped')
-	expect(skipped.winningOption).toBeNull()
-	const audienceEvents = hubSpies.publishAudience.mock.calls as [
-		string,
-		WsEvent,
-	][]
-	expect(audienceEvents.at(-1)?.[1]).toEqual({
-		type: 'music_result',
-		pollId: poll.id,
-	})
+	const questions = await prisma.poll.findMany({ where: { roomId: room.id } })
+	expect(questions).toHaveLength(3)
+	expect(
+		questions.every(
+			(question) =>
+				question.status === 'open' && question.winningOption === null,
+		),
+	).toBe(true)
 })
 
 test('host confirmation applies the candidate and informs listeners', async () => {
@@ -444,7 +432,9 @@ test('host confirmation applies the candidate and informs listeners', async () =
 		string,
 		WsEvent,
 	][]
-	expect(audienceEvents).toHaveLength(1)
+	expect(
+		audienceEvents.filter(([, event]) => event.type === 'music_result'),
+	).toHaveLength(1)
 	expect(audienceEvents.at(-1)?.[1]).toEqual({
 		type: 'music_result',
 		pollId: poll.id,
@@ -538,10 +528,6 @@ test('router get returns FORBIDDEN for non-owner', async () => {
 
 const outroEngineThatFails = {
 	generateInitialPattern,
-	generateNextQuestion: async () => ({
-		question: 'More energy?',
-		options: ['more energy', 'deeper, darker groove'],
-	}),
 	generateOutro: async () => {
 		throw new MusicGenError('Failed to generate a valid outro after 2 attempts')
 	},
@@ -557,7 +543,7 @@ test('endRoom keeps the current pattern and still ends when outro generation fai
 	await prisma.poll.create({
 		data: {
 			roomId: room.id,
-			seq: 2,
+			seq: 10,
 			kind: 'evolution',
 			question: 'More drums?',
 			options: [

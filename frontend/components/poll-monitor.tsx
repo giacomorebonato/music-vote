@@ -22,7 +22,7 @@ export function PollMonitor({
 	return (
 		<div className="card bg-base-200" data-testid="poll-monitor">
 			<div className="card-body gap-3">
-				<span className="eyebrow">live poll</span>
+				<span className="eyebrow">crowd mood</span>
 				<h2 className="font-semibold">{question}</h2>
 				{options.map((option) => {
 					const count = counts[option.key] ?? 0
@@ -38,6 +38,7 @@ export function PollMonitor({
 								<span>{count}</span>
 							</div>
 							<progress
+								aria-label={`${option.label}: ${count} answers`}
 								className="progress progress-primary"
 								value={percent}
 								max={100}

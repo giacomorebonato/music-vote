@@ -452,3 +452,62 @@ test('summary returns polls with winners, applied flags, and versions', async ()
 		source: applied.id,
 	})
 })
+
+test('persistent questions replace answers, restore selections and broadcast the crowd view', async () => {
+	const room = await makeRoom()
+	const { ensurePreferenceQuestions } =
+		await import('@backend/votes/preferences')
+	await ensurePreferenceQuestions(room.id)
+	const caller = votingRouter.createCaller(
+		callerCtx({ headers: { cookie: 'mv_session=listener-a' } }),
+	)
+	const initial = await caller.crowd({ roomId: room.id })
+	expect(initial.questions).toHaveLength(3)
+	const energy = initial.questions[0]!
+	await caller.castVote({ pollId: energy.id, choice: 'mellow' })
+	await caller.castVote({ pollId: energy.id, choice: 'intense' })
+	await caller.castVote({ pollId: energy.id, choice: 'intense' })
+	await service.castVote(energy.id, 'listener-b', 'mellow')
+	const restored = await caller.crowd({ roomId: room.id })
+	expect(restored.questions[0]!.choice).toBe('intense')
+	expect(restored.questions[0]!.counts).toEqual({
+		mellow: 1,
+		balanced: 0,
+		intense: 1,
+	})
+	expect(await prisma.vote.count({ where: { pollId: energy.id } })).toBe(2)
+	const anonymous = await votingRouter
+		.createCaller(callerCtx())
+		.crowd({ roomId: room.id })
+	expect(anonymous.questions[0]!.choice).toBeNull()
+	expect(JSON.stringify(anonymous)).not.toContain('listener-a')
+	expect(hubSpies.publishAudience).toHaveBeenCalledWith(room.id, {
+		type: 'crowd_changed',
+	})
+	expect(hubSpies.publishHost).toHaveBeenCalledWith(room.id, {
+		type: 'crowd_changed',
+	})
+})
+
+test('answers are independent across questions and refused after the room ends', async () => {
+	const room = await makeRoom()
+	const { ensurePreferenceQuestions, readCrowdQuestions } =
+		await import('@backend/votes/preferences')
+	await ensurePreferenceQuestions(room.id)
+	const questions = await readCrowdQuestions(room.id)
+	await service.castVote(questions[0]!.id, 'listener', 'mellow')
+	await service.castVote(questions[1]!.id, 'listener', 'busy')
+	const restored = await readCrowdQuestions(room.id, 'listener')
+	expect(restored.map((question) => question.choice)).toEqual([
+		'mellow',
+		'busy',
+		null,
+	])
+	await prisma.room.update({
+		where: { id: room.id },
+		data: { status: 'outro' },
+	})
+	await expect(
+		service.castVote(questions[0]!.id, 'listener', 'intense'),
+	).rejects.toThrow('Room is not live')
+})

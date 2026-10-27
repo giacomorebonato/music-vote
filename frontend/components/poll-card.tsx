@@ -1,145 +1,65 @@
-export type PollOption = { key: string; label: string }
+import type { CrowdQuestion } from '@shared/schemas/preferences'
 
-export type PollCardPoll = {
-	id: string
-	question: string
-	options: PollOption[]
-	closesAt: string | null
-}
-
-export type SummaryPoll = {
-	question: string
-	winningOption: string | null
-	winningLabel?: string | null
-	deliveryStatus?: string | null
-	applied: boolean
-	reverted?: boolean
-}
-
-function summaryOutcome(poll: SummaryPoll): string | null {
-	if (poll.applied) return 'music changed'
-	if (poll.reverted) return 'later undone'
-	if (poll.deliveryStatus === 'unchanged') return 'groove stayed'
-	if (poll.deliveryStatus === 'failed') return 'change could not play'
-	return null
-}
-
-/** Seconds remaining rendered as `m:ss`, clamped at zero. */
-export function formatCountdown(totalSeconds: number): string {
-	const clamped = Math.max(0, Math.floor(totalSeconds))
-	const minutes = Math.floor(clamped / 60)
-	const seconds = clamped % 60
-	return `${minutes}:${String(seconds).padStart(2, '0')}`
-}
-
-/**
- * The single poll a phone shows at a time. Buttons are rendered from the
- * poll's own option keys — evolution polls use two generated choices, while
- * the end poll uses wrap/continue — so nothing here hardcodes option names.
- *
- * Fully prop-driven: the parent owns the vote outcome, which keeps both the
- * pre-vote and voted states directly renderable in a static test.
- */
+/** One persistent question. Counts are a playful view of the whole crowd. */
 export function PollCard({
 	question,
-	options,
-	selectedKey,
-	voted,
-	countdownSeconds,
 	pending,
+	disabled,
 	onVote,
 }: {
-	question: string
-	options: PollOption[]
-	selectedKey: string | null
-	voted: boolean
-	countdownSeconds: number | null
+	question: CrowdQuestion
 	pending: boolean
+	disabled: boolean
 	onVote: (choice: string) => void
 }) {
-	return (
-		<div className="card bg-base-100 shadow-xl" data-testid="poll-card">
-			<div className="card-body gap-4">
-				<div className="flex items-center justify-between">
-					<span className="eyebrow">vote now</span>
-					{countdownSeconds === null ? null : (
-						<span className="badge badge-neutral" data-testid="poll-countdown">
-							{formatCountdown(countdownSeconds)}
-						</span>
-					)}
-				</div>
-				<h2 className="font-bold text-xl" data-testid="poll-question">
-					{question}
-				</h2>
-				<div className="flex flex-col gap-3">
-					{options.map((option) => (
-						<button
-							key={option.key}
-							type="button"
-							className={`btn btn-lg ${
-								selectedKey === option.key ? 'btn-success' : 'btn-primary'
-							}`}
-							data-testid={`vote-option-${option.key}`}
-							disabled={voted || pending}
-							onClick={() => onVote(option.key)}
-						>
-							{option.label}
-						</button>
-					))}
-				</div>
-				{voted ? (
-					<div className="alert alert-success" data-testid="vote-counted">
-						<span>Vote counted. Back to dancing!</span>
-					</div>
-				) : null}
-			</div>
-		</div>
+	const total = Object.values(question.counts).reduce(
+		(sum, count) => sum + count,
+		0,
 	)
-}
-
-/**
- * Ended screen: the timeline of every poll that actually shaped the set.
- *
- * `voting.summary` returns a superset — queued/open polls and polls whose
- * `winningOption` is null (zero votes or a tie) never changed the music, so
- * they are filtered out here rather than rendered.
- */
-export function PollTimeline({ polls }: { polls: SummaryPoll[] }) {
-	const decided = polls.filter((poll) => poll.winningOption !== null)
-
 	return (
-		<div className="flex flex-col gap-4" data-testid="poll-timeline">
-			<h2 className="font-bold text-2xl">Set summary</h2>
-			{decided.length === 0 ? (
-				<p className="opacity-70" data-testid="timeline-empty">
-					No polls were decided.
-				</p>
-			) : (
-				<ol className="flex flex-col gap-3">
-					{decided.map((poll) => (
-						<li
-							key={`${poll.question}|${poll.winningOption}|${poll.applied}`}
-							className="card bg-base-200"
-							data-testid="timeline-item"
-						>
-							<div className="card-body gap-1">
-								<span className="text-sm opacity-70">poll</span>
-								<span className="font-medium">{poll.question}</span>
-								<div className="flex items-center gap-2">
-									<span className="badge badge-primary">
-										{poll.winningLabel ?? poll.winningOption}
+		<section
+			className="card bg-base-100 shadow-xl"
+			data-testid="preference-question"
+			aria-label={question.question}
+		>
+			<div className="card-body gap-3 p-4">
+				<h2 className="font-bold text-lg">{question.question}</h2>
+				<div className="grid grid-cols-3 gap-2">
+					{question.options.map((option) => {
+						const count = question.counts[option.key] ?? 0
+						const percent = total === 0 ? 0 : Math.round((count / total) * 100)
+						return (
+							<div key={option.key} className="flex flex-col gap-1">
+								<button
+									type="button"
+									className={`btn h-auto min-h-16 flex-col gap-1 px-1 py-2 text-sm disabled:opacity-100 disabled:text-base-content ${question.choice === option.key ? 'btn-primary' : 'btn-outline'}`}
+									aria-pressed={question.choice === option.key}
+									data-testid={`vote-option-${option.key}`}
+									disabled={disabled || pending}
+									onClick={() => onVote(option.key)}
+								>
+									<span>
+										{option.label}
+										{question.choice === option.key ? ' ✓' : ''}
 									</span>
-									{summaryOutcome(poll) ? (
-										<span className="text-xs opacity-70">
-											{summaryOutcome(poll)}
-										</span>
-									) : null}
-								</div>
+									<span>
+										{count} · {percent}%
+									</span>
+								</button>
+								<progress
+									className="progress progress-primary h-1"
+									value={percent}
+									max={100}
+									aria-label={`${option.label}: ${count} of ${total} answers`}
+								/>
 							</div>
-						</li>
-					))}
-				</ol>
-			)}
-		</div>
+						)
+					})}
+				</div>
+				<p className="text-xs opacity-60">
+					{total} {total === 1 ? 'answer' : 'answers'}
+				</p>
+			</div>
+		</section>
 	)
 }

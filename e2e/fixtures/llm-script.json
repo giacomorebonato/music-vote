@@ -1,6 +1,8 @@
 {
 	"responses": [
-		"s(\"bd sd cp hh\").gain(0.8)\nnote(\"c2 eb2 g2\").s(\"sawtooth\").lpf(700)",
-		"Sharper drums or warmer chords?\n- sharper drums\n- warmer chords"
+		"s(\"bd sd cp hh\").gain(0.8)\nnote(\"c2 eb2 g2\").s(\"sawtooth\").lpf(700)"
+	],
+	"crowdResponses": [
+		"s(\"bd sd cp hh\").gain(0.7)\nnote(\"c2 eb2 g2\").s(\"sawtooth\").lpf(900)"
 	]
 }

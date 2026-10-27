@@ -91,9 +91,21 @@ export async function castVote(
 			) {
 				throw new TRPCError({ code: 'BAD_REQUEST', message: 'Poll is closed' })
 			}
-			await tx.vote.create({
-				data: { pollId, sessionToken: token, choice },
-			})
+			const room = await tx.room.findUnique({ where: { id: poll.roomId } })
+			if (room?.status !== 'live')
+				throw new TRPCError({
+					code: 'BAD_REQUEST',
+					message: 'Room is not live',
+				})
+			if (current.kind === 'preference') {
+				await tx.vote.upsert({
+					where: { pollId_sessionToken: { pollId, sessionToken: token } },
+					create: { pollId, sessionToken: token, choice },
+					update: { choice },
+				})
+			} else {
+				await tx.vote.create({ data: { pollId, sessionToken: token, choice } })
+			}
 		})
 	} catch (error) {
 		if (
@@ -105,6 +117,11 @@ export async function castVote(
 		throw error
 	}
 
+	if (poll.kind === 'preference') {
+		hub.publishAudience(poll.roomId, { type: 'crowd_changed' })
+		hub.publishHost(poll.roomId, { type: 'crowd_changed' })
+		return
+	}
 	const counts = await countVotes(pollId, options)
 	hub.publishHost(poll.roomId, {
 		type: 'vote_count',

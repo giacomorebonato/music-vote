@@ -21,6 +21,10 @@ export type StateDoc = {
 	elements: StateDocElements
 	history: StateDocHistoryEntry[]
 	polledDimensions: string[]
+	crowdHistory?: {
+		at: number
+		snapshot: import('@shared/schemas/preferences').CrowdSnapshot
+	}[]
 }
 
 // Zero-history doc for a freshly started room: no poll has been applied yet, so

@@ -291,3 +291,61 @@ test('generateNextQuestion: provider throw falls back to canned question after 2
 	expect(result).toEqual(fallbackQuestion)
 	expect(provider.calls).toBe(2)
 })
+
+test('crowd evolution includes minority preferences, permits HOLD, and never selects a winner', async () => {
+	const { generateCrowdEvolution } = await import('@backend/music/engine')
+	const prompts: string[] = []
+	const snapshot = [
+		{
+			id: 'energy',
+			question: 'Energy?',
+			options: [
+				{ key: 'mellow', label: 'Mellow' },
+				{ key: 'intense', label: 'Intense' },
+			],
+			counts: { mellow: 1, intense: 3 },
+		},
+	]
+	const provider = {
+		chat: async (prompt: string) => {
+			prompts.push(prompt)
+			return 'HOLD'
+		},
+	}
+	expect(
+		await generateCrowdEvolution(
+			provider,
+			initialStateDoc(params),
+			snapshot,
+			validCode,
+		),
+	).toBe('hold')
+	expect(prompts[0]).toContain('"mellow":1,"intense":3')
+	expect(prompts[0]).toContain('There is no winner')
+	expect(prompts[0]).toContain('desired musical states')
+	expect(prompts[0]).not.toContain('Winning vote:')
+})
+
+test('crowd evolution validates code, retries invalid output, and treats identical code as a hold', async () => {
+	const { generateCrowdEvolution } = await import('@backend/music/engine')
+	const doc = initialStateDoc(params)
+	expect(
+		await generateCrowdEvolution(
+			new MockLlmProvider([invalidCode, 's("bd")']),
+			doc,
+			[],
+			validCode,
+		),
+	).toEqual({ code: 's("bd")' })
+	expect(
+		await generateCrowdEvolution(
+			new MockLlmProvider([validCode]),
+			doc,
+			[],
+			validCode,
+		),
+	).toBe('hold')
+	expect(
+		await generateCrowdEvolution(new ThrowingProvider(), doc, [], validCode),
+	).toBeNull()
+})

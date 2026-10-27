@@ -70,6 +70,7 @@ export type PatternRejectedEvent = {
 
 /** @public */
 export type WsEvent =
+	| { type: 'crowd_changed' }
 	| PollOpenedEvent
 	| PollClosedEvent
 	| RoomEndedEvent

@@ -55,6 +55,7 @@ export class OllamaProvider implements LlmProvider {
 
 		const response = await fetch(`${this.baseUrl}/api/chat`, {
 			method: 'POST',
+			signal: AbortSignal.timeout(25_000),
 			headers,
 			body: JSON.stringify(body),
 		})
@@ -73,11 +74,14 @@ export class OllamaProvider implements LlmProvider {
 	}
 }
 
-function readScriptFile(path: string): string[] {
+function readScriptFile(path: string, crowd = false): string[] {
 	const parsed = JSON.parse(readFileSync(path, 'utf8')) as {
 		responses?: unknown
+		crowdResponses?: unknown
 	}
-	const responses = parsed.responses
+	const responses = crowd
+		? (parsed.crowdResponses ?? parsed.responses)
+		: parsed.responses
 	if (
 		!Array.isArray(responses) ||
 		!responses.every((item) => typeof item === 'string')
@@ -94,6 +98,7 @@ function readScriptFile(path: string): string[] {
 // once exhausted so tests never fall back to a real model.
 export class MockLlmProvider implements LlmProvider {
 	private readonly responses: string[]
+	private readonly crowdResponses?: string[]
 
 	constructor(responses?: string[]) {
 		if (responses !== undefined) {
@@ -105,10 +110,14 @@ export class MockLlmProvider implements LlmProvider {
 			throw new Error('MockLlmProvider: pass responses or set LLM_MOCK_SCRIPT')
 		}
 		this.responses = readScriptFile(scriptPath)
+		this.crowdResponses = readScriptFile(scriptPath, true)
 	}
 
 	async chat(_prompt: string, _opts?: LlmChatOptions): Promise<string> {
-		const next = this.responses.shift()
+		const queue = _prompt.startsWith('Guide this live ')
+			? (this.crowdResponses ?? this.responses)
+			: this.responses
+		const next = queue.shift()
 		if (next === undefined) {
 			throw new Error('MockLlmProvider: scripted responses exhausted')
 		}

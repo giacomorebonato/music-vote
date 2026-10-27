@@ -73,7 +73,7 @@ function changeOptions(lines: string[]): string[] {
  * question with fewer than two usable change options keeps the question and
  * pairs it with the canned changes, so a poll always offers a real choice.
  */
-export function parseQuestionResponse(raw: string): GeneratedQuestion | null {
+function parseQuestionResponse(raw: string): GeneratedQuestion | null {
 	const lines = raw
 		.split('\n')
 		.map((line) => line.trim())
@@ -184,4 +184,26 @@ export async function generateNextQuestion(
 	}
 
 	return { question: FALLBACK_QUESTION, options: [...FALLBACK_OPTIONS] }
+}
+
+/** A crowd snapshot guides the music; no answer is selected as a winner. */
+export async function generateCrowdEvolution(
+	provider: LlmProvider,
+	doc: StateDoc,
+	snapshot: import('@shared/schemas/preferences').CrowdSnapshot,
+	currentCode: string,
+): Promise<{ code: string } | 'hold' | null> {
+	const { buildCrowdPrompt } = await import('@backend/music/prompts')
+	const prompt = buildCrowdPrompt(doc, snapshot, currentCode)
+	for (let attempt = 0; attempt < MAX_CODE_ATTEMPTS; attempt++) {
+		try {
+			const raw = await provider.chat(prompt)
+			if (raw.trim() === 'HOLD' || raw.trim() === currentCode.trim())
+				return 'hold'
+			if (compileCheck(raw).ok) return { code: raw }
+		} catch {
+			// A failed or invalid response gets the same bounded retry as other generation.
+		}
+	}
+	return null
 }

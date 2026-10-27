@@ -126,68 +126,11 @@ export function CreateRoute() {
 						)}
 					</form.Field>
 
-					<form.Field name="pollIntervalSec">
-						{(field) => (
-							<label className="form-control flex flex-col gap-1">
-								<span className="label-text">
-									Dance time between rounds in seconds (5–600)
-								</span>
-								<input
-									className="input input-bordered w-full"
-									type="number"
-									min={5}
-									max={600}
-									step={5}
-									value={field.state.value}
-									onBlur={field.handleBlur}
-									onChange={(event) =>
-										field.handleChange(event.target.valueAsNumber)
-									}
-								/>
-							</label>
-						)}
-					</form.Field>
-
-					<form.Field name="pollOpenSec">
-						{(field) => (
-							<label className="form-control flex flex-col gap-1">
-								<span className="label-text">
-									Time to vote in seconds (15–600)
-								</span>
-								<input
-									className="input input-bordered w-full"
-									type="number"
-									min={15}
-									max={600}
-									step={5}
-									value={field.state.value}
-									onBlur={field.handleBlur}
-									onChange={(event) =>
-										field.handleChange(event.target.valueAsNumber)
-									}
-								/>
-								<span className="text-xs opacity-60">
-									Countdown while the crowd chooses.
-								</span>
-							</label>
-						)}
-					</form.Field>
-
-					<form.Subscribe
-						selector={(state) => [
-							state.values.pollIntervalSec,
-							state.values.pollOpenSec,
-						]}
-					>
-						{([intervalSec, openSec]) =>
-							Number.isFinite(intervalSec) && Number.isFinite(openSec) ? (
-								<p className="text-xs opacity-60" data-testid="cycle-estimate">
-									≈ {intervalSec}s to dance after each result, then {openSec}s
-									to vote
-								</p>
-							) : null
-						}
-					</form.Subscribe>
+					<p className="text-sm opacity-70">
+						Three questions stay open throughout the set. People can change
+						their answers anytime; the music listens for changes every 10
+						seconds.
+					</p>
 
 					{createRoom.error ? (
 						<div className="alert alert-error" data-testid="create-error">

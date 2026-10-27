@@ -1,15 +1,18 @@
 # music-vote
 
-Crowd-voted AI live music. A host opens a room at a venue, picks a vibe, and
-the music starts playing from the host's browser into the PA. Phones join by
-scanning a QR code — no login, no app — and choose between two musical
-directions. A strict majority wins; ties and rounds without votes keep the
-current groove. Occasional polls let the crowd vote to stay with it. A winning
-change is turned into new live-coded Strudel by an LLM, validated server-side,
-and sent to the host browser for playback. Phones show the result, whether the
-host applied it, and when the next vote is due. The set keeps evolving until
-an AI outro closes it with a timeline of the crowd's decisions. The server
-conducts and owns the room state; the host browser is the audio engine.
+Crowd-guided AI live music. A host opens a room at a venue, picks a vibe, and
+plays music from the host's browser into the PA. Phones join by scanning a QR
+code, with no login or app. Three persistent questions — energy, rhythm and
+mood — show the room's preferences on phones and the host screen. Answer any
+question and change your mind anytime; each phone's latest answer counts once.
+
+There are no winners, voting deadlines or majority decisions. Live counts are
+for fun. Every 10 seconds the server checks for a changed crowd distribution
+and sends the complete snapshot to the music agent. The agent can gently evolve
+the groove or hold it. Updates are serialized through host playback confirmation;
+answers collected in the meantime feed the next snapshot. An AI outro closes
+the set, and phones retain the final crowd distribution. The server owns room
+state; the host browser is the audio engine.
 
 ## Quick start
 
@@ -34,8 +37,9 @@ LLM_MOCK_SCRIPT=e2e/fixtures/llm-script.json
 
 Then sign up, create a room, and start it. Each LLM operation builds a fresh
 provider that re-reads that file from index 0 and pops responses in order, so
-the flow is deterministic and safe for demos and tests (a room start consumes
-`responses[0]` and `responses[1]`; later calls start over at `responses[0]`).
+the flow is deterministic for demos and tests. Opening and outro prompts use
+`responses`; crowd prompts use optional `crowdResponses` (falling back to
+`responses`). A fresh provider starts each queue from index 0.
 
 For real musicality set `LLM_PROVIDER=ollama`, `OLLAMA_MODEL=<tag>` and point
 `OLLAMA_BASE_URL` at a local Ollama (`http://localhost:11434`) or at

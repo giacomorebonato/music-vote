@@ -1,14 +1,10 @@
 import { prisma } from '@backend/db/client'
 import { getLlmProvider } from '@backend/llm/provider'
-import {
-	generateInitialPattern,
-	generateNextQuestion,
-	generateOutro,
-} from '@backend/music/engine'
+import { generateInitialPattern, generateOutro } from '@backend/music/engine'
 import type { StateDoc } from '@backend/music/state-doc'
 import { armScheduler, disarmScheduler } from '@backend/polls/scheduler'
 import { hub } from '@backend/realtime/hub'
-import { toPollOptions } from '@backend/votes/service'
+import { preferenceQuestions } from '@shared/schemas/preferences'
 import type { createRoomSchema } from '@shared/schemas/room'
 import type { z } from 'zod'
 import type { Prisma, Room } from '../../prisma/generated/client'
@@ -17,13 +13,11 @@ type CreateRoomInput = z.infer<typeof createRoomSchema>
 
 type EngineDeps = {
 	generateInitialPattern: typeof generateInitialPattern
-	generateNextQuestion: typeof generateNextQuestion
 	generateOutro: typeof generateOutro
 }
 
 const defaultEngine: EngineDeps = {
 	generateInitialPattern,
-	generateNextQuestion,
 	generateOutro,
 }
 
@@ -63,44 +57,53 @@ export async function startRoom(
 		genre: room.genre,
 		bpm: room.bpm,
 	})
-	const generated = await engine.generateNextQuestion(provider, doc)
 	const now = new Date()
-	const version = await prisma.patternVersion.create({
-		data: {
-			roomId,
-			code,
-			stateDoc: doc as unknown as Prisma.InputJsonObject,
-			source: 'initial',
-			status: 'applied',
-			appliedAt: now,
-		},
+	const version = await prisma.$transaction(async (tx) => {
+		const started = await tx.room.updateMany({
+			where: { id: roomId, status: 'lobby' },
+			data: {
+				currentCode: code,
+				stateDoc: doc as unknown as Prisma.InputJsonObject,
+				status: 'live',
+				startedAt: now,
+			},
+		})
+		if (started.count === 0) throw new Error('Room is not in lobby')
+		const initial = await tx.patternVersion.create({
+			data: {
+				roomId,
+				code,
+				stateDoc: doc as unknown as Prisma.InputJsonObject,
+				source: 'initial',
+				status: 'applied',
+				appliedAt: now,
+			},
+		})
+		await tx.room.update({
+			where: { id: roomId },
+			data: { currentVersionId: initial.id },
+		})
+		await tx.poll.createMany({
+			data: preferenceQuestions.map((question, index) => ({
+				roomId,
+				seq: index + 1,
+				kind: 'preference',
+				question: question.question,
+				options: question.options,
+				status: 'open',
+				openedAt: now,
+			})),
+		})
+		return initial
 	})
-	await prisma.room.update({
-		where: { id: roomId },
-		data: {
-			currentCode: code,
-			currentVersionId: version.id,
-			stateDoc: doc as unknown as Prisma.InputJsonObject,
-			status: 'live',
-			startedAt: now,
-		},
-	})
+
 	hub.publishHost(roomId, {
 		type: 'code_update',
 		code,
 		versionId: version.id,
 		kind: 'initial',
 	})
-	await prisma.poll.create({
-		data: {
-			roomId,
-			seq: 1,
-			kind: 'evolution',
-			question: generated.question,
-			options: toPollOptions(generated.options),
-			status: 'queued',
-		},
-	})
+	hub.publishAudience(roomId, { type: 'crowd_changed' })
 	armScheduler(roomId)
 }
 
@@ -140,6 +143,15 @@ export async function endRoom(
 	}
 
 	disarmScheduler(roomId)
+	if (room.status === 'live') {
+		await prisma.room.update({
+			where: { id: roomId },
+			data: { status: 'outro' },
+		})
+		hub.publishAudience(roomId, { type: 'room_status', status: 'outro' })
+		hub.publishHost(roomId, { type: 'room_status', status: 'outro' })
+	}
+	await cancelPendingUpdates(roomId)
 	await closeOpenPoll(roomId)
 
 	if (room.status === 'lobby') {
@@ -214,6 +226,8 @@ export async function undoLastChange(
 		throw new Error('Room not found or access denied')
 	}
 
+	await cancelPendingUpdates(roomId)
+
 	const current = await prisma.patternVersion.findFirst({
 		where: { roomId, status: 'applied' },
 		orderBy: { appliedAt: 'desc' },
@@ -259,7 +273,7 @@ export async function skipPoll(roomId: string, hostId: string): Promise<void> {
 		throw new Error('Room not found or access denied')
 	}
 	const open = await prisma.poll.findFirst({
-		where: { roomId, status: 'open' },
+		where: { roomId, status: 'open', kind: { not: 'preference' } },
 	})
 	if (!open) return
 	const updated = await prisma.poll.updateMany({
@@ -400,4 +414,19 @@ export async function reportApplyResult(
 			})
 		}
 	}
+}
+
+async function cancelPendingUpdates(roomId: string): Promise<void> {
+	await prisma.$transaction(async (tx) => {
+		await tx.poll.updateMany({
+			where: { roomId, deliveryStatus: 'preparing' },
+			data: { deliveryStatus: 'failed', resolvedAt: new Date() },
+		})
+		await tx.patternVersion.updateMany({
+			where: { roomId, status: 'candidate', source: { not: 'outro' } },
+			data: { status: 'rejected' },
+		})
+	})
+	hub.publishAudience(roomId, { type: 'crowd_changed' })
+	hub.publishHost(roomId, { type: 'crowd_changed' })
 }

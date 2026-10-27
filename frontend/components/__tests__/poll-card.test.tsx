@@ -1,107 +1,55 @@
 import { expect, test } from 'bun:test'
-import {
-	formatCountdown,
-	PollCard,
-	PollTimeline,
-} from '@frontend/components/poll-card'
+import { PollCard } from '@frontend/components/poll-card'
 import { renderToStaticMarkup } from 'react-dom/server'
 
-const noop = () => {}
-
-function countDisabled(markup: string): number {
-	return markup.match(/disabled=""/g)?.length ?? 0
+const question = {
+	id: 'energy',
+	question: 'What energy feels right?',
+	options: [
+		{ key: 'mellow', label: 'Mellow' },
+		{ key: 'intense', label: 'Intense' },
+	],
+	counts: { mellow: 1, intense: 3 },
+	choice: 'mellow',
 }
 
-test('renders the question and one button per option, never hardcoding yes/no', () => {
+test('saved choices stay editable and the full distribution stays visible', () => {
 	const markup = renderToStaticMarkup(
 		<PollCard
-			question="End the set?"
-			options={[
-				{ key: 'wrap', label: 'Wrap it up' },
-				{ key: 'continue', label: 'Keep going' },
-			]}
-			selectedKey={null}
-			voted={false}
-			countdownSeconds={75}
+			question={question}
 			pending={false}
-			onVote={noop}
+			disabled={false}
+			onVote={() => {}}
 		/>,
 	)
-
-	expect(markup).toContain('End the set?')
-	expect(markup).toContain('Wrap it up')
-	expect(markup).toContain('Keep going')
-	expect(markup).toContain('data-testid="vote-option-wrap"')
-	expect(markup).toContain('data-testid="vote-option-continue"')
-	expect(markup).toContain('1:15')
-	expect(markup).not.toContain('data-testid="vote-counted"')
-	expect(countDisabled(markup)).toBe(0)
+	expect(markup).toContain('aria-pressed="true"')
+	expect(markup).toContain('1 · 25%')
+	expect(markup).toContain('3 · 75%')
+	expect(markup).not.toContain('disabled=""')
+	expect(markup).not.toContain('countdown')
 })
 
-test('disables the buttons and shows "Vote counted" after voting', () => {
+test('empty questions have zero counts without invalid percentages', () => {
 	const markup = renderToStaticMarkup(
 		<PollCard
-			question="More energy?"
-			options={[
-				{ key: 'yes', label: 'Yes' },
-				{ key: 'no', label: 'No' },
-			]}
-			selectedKey="yes"
-			voted={true}
-			countdownSeconds={10}
+			question={{ ...question, counts: {}, choice: null }}
 			pending={false}
-			onVote={noop}
+			disabled={false}
+			onVote={() => {}}
 		/>,
 	)
-
-	expect(markup).toContain('data-testid="vote-counted"')
-	expect(markup).toContain('Vote counted')
-	// Both option buttons are disabled once the vote is recorded.
-	expect(countDisabled(markup)).toBe(2)
+	expect(markup).toContain('0 answers')
+	expect(markup).not.toContain('NaN')
 })
 
-test('formats the countdown as m:ss, clamped at zero', () => {
-	expect(formatCountdown(75)).toBe('1:15')
-	expect(formatCountdown(5)).toBe('0:05')
-	expect(formatCountdown(0)).toBe('0:00')
-	expect(formatCountdown(-3)).toBe('0:00')
-	expect(formatCountdown(125)).toBe('2:05')
-})
-
-test('ended timeline lists only decided polls', () => {
-	const markup = renderToStaticMarkup(
-		<PollTimeline
-			polls={[
-				{ question: 'More energy?', winningOption: 'yes', applied: true },
-				{ question: 'Zero votes?', winningOption: null, applied: false },
-				{ question: 'End the set?', winningOption: 'continue', applied: false },
-			]}
-		/>,
-	)
-
-	expect(markup).toContain('Set summary')
-	expect(markup).toContain('More energy?')
-	expect(markup).toContain('End the set?')
-	expect(markup).toContain('yes')
-	expect(markup).toContain('continue')
-	expect(markup).not.toContain('Zero votes?')
-})
-
-test('set timeline uses listener-facing labels and distinguishes a hold', () => {
-	const markup = renderToStaticMarkup(
-		<PollTimeline
-			polls={[
-				{
-					question: 'Stay here?',
-					winningOption: 'stay-here',
-					winningLabel: 'Stay here',
-					deliveryStatus: 'unchanged',
-					applied: false,
-				},
-			]}
-		/>,
-	)
-	expect(markup).toContain('Stay here')
-	expect(markup).toContain('groove stayed')
-	expect(markup).not.toContain('stay-here')
+test('pending saves and ended sets disable answer submission', () => {
+	for (const props of [
+		{ pending: true, disabled: false },
+		{ pending: false, disabled: true },
+	]) {
+		const markup = renderToStaticMarkup(
+			<PollCard question={question} {...props} onVote={() => {}} />,
+		)
+		expect(markup.match(/disabled=""/g)).toHaveLength(2)
+	}
 })

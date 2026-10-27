@@ -182,3 +182,25 @@ export function buildOutroPrompt(doc: StateDoc, currentCode: string): string {
 		CODE_ONLY_RULE,
 	].join('\n')
 }
+
+export function buildCrowdPrompt(
+	doc: StateDoc,
+	snapshot: import('@shared/schemas/preferences').CrowdSnapshot,
+	currentCode: string,
+): string {
+	return [
+		`Guide this live ${doc.genre} Strudel set at ${doc.bpm} BPM using the crowd's preferences.`,
+		'Current pattern:',
+		currentCode,
+		'Crowd snapshot (counts are each listener’s latest answer, not accumulated taps):',
+		JSON.stringify(snapshot),
+		'Previous applied crowd preferences:',
+		JSON.stringify(doc.crowdHistory?.at(-1)?.snapshot ?? null),
+		'There is no winner, majority decision, or required winning option. Interpret the entire distribution, including minority preferences and unanswered questions.',
+		'These are desired musical states, not repeated requests to increase or decrease anything. Keep a coherent groove, preserve the tempo and recognizable motifs, and make at most one gentle musical adjustment.',
+		'If the groove already fits this mix, return exactly HOLD. Otherwise return the complete updated Strudel pattern.',
+		fewShotsBlock(),
+		soundsBlock(),
+		'Output only HOLD or strudel.js code, no prose or markdown fences.',
+	].join('\n')
+}
