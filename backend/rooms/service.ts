@@ -144,10 +144,11 @@ export async function endRoom(
 
 	disarmScheduler(roomId)
 	if (room.status === 'live') {
-		await prisma.room.update({
-			where: { id: roomId },
+		const claimed = await prisma.room.updateMany({
+			where: { id: roomId, status: 'live' },
 			data: { status: 'outro' },
 		})
+		if (claimed.count === 0) return
 		hub.publishAudience(roomId, { type: 'room_status', status: 'outro' })
 		hub.publishHost(roomId, { type: 'room_status', status: 'outro' })
 	}
@@ -236,18 +237,23 @@ export async function undoLastChange(
 		return
 	}
 
-	await prisma.patternVersion.update({
-		where: { id: current.id },
-		data: { status: 'reverted' },
-	})
-
 	const previous = await prisma.patternVersion.findFirst({
-		where: { roomId, status: 'applied', appliedAt: { not: null } },
+		where: {
+			roomId,
+			id: { not: current.id },
+			status: 'applied',
+			appliedAt: { not: null },
+		},
 		orderBy: { appliedAt: 'desc' },
 	})
 	if (!previous) {
 		return
 	}
+
+	await prisma.patternVersion.update({
+		where: { id: current.id },
+		data: { status: 'reverted' },
+	})
 
 	await prisma.room.update({
 		where: { id: roomId },

@@ -382,3 +382,73 @@ test('disarm prevents a late generation from publishing music', async () => {
 	).toBe(0)
 	expect(scheduler.isSchedulerArmed(room.id)).toBe(false)
 })
+
+test('the set deadline ends input and starts one outro even when the maintenance tick is also due', async () => {
+	const room = await makeRoom()
+	await boot(room.id)
+	await advance(600_000)
+	expect(
+		(await prisma.room.findUniqueOrThrow({ where: { id: room.id } })).status,
+	).toBe('outro')
+	expect(
+		await prisma.poll.count({
+			where: { roomId: room.id, kind: 'preference', status: 'open' },
+		}),
+	).toBe(0)
+	expect(
+		await prisma.patternVersion.count({
+			where: { roomId: room.id, source: 'outro' },
+		}),
+	).toBe(1)
+	expect(scheduler.isSchedulerArmed(room.id)).toBe(false)
+})
+
+test('restart restores the remaining outro time and announces the end', async () => {
+	const room = await makeRoom()
+	await prisma.room.update({
+		where: { id: room.id },
+		data: { status: 'outro' },
+	})
+	await prisma.patternVersion.create({
+		data: {
+			roomId: room.id,
+			source: 'outro',
+			status: 'candidate',
+			code: 's("bd")',
+			appliedAt: new Date(time - 50_000),
+		},
+	})
+	await boot(room.id)
+	await advance(9999)
+	expect(
+		(await prisma.room.findUniqueOrThrow({ where: { id: room.id } })).status,
+	).toBe('outro')
+	await advance(1)
+	expect(
+		(await prisma.room.findUniqueOrThrow({ where: { id: room.id } })).status,
+	).toBe('ended')
+	expect(publishAudience).toHaveBeenCalledWith(room.id, { type: 'room_ended' })
+})
+
+test('ending during generation rejects the late crowd result', async () => {
+	let finish!: (value: { code: string }) => void
+	generate.mockImplementationOnce(
+		() =>
+			new Promise((resolve) => {
+				finish = resolve
+			}),
+	)
+	const room = await makeRoom()
+	await answer(room.questions[0]!.id)
+	await boot(room.id)
+	await advance(10_000)
+	await service.endRoom(room.id, room.hostId)
+	finish({ code: 's("bd sd")' })
+	await settle()
+	expect(
+		await prisma.patternVersion.count({
+			where: { roomId: room.id, source: { not: 'outro' }, status: 'candidate' },
+		}),
+	).toBe(0)
+	expect((await updates(room.id))[0]!.deliveryStatus).toBe('failed')
+})
