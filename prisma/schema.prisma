@@ -38,6 +38,15 @@ model Room {
   stateDoc        Json
   createdAt       DateTime         @default(now())
   startedAt       DateTime?
+  textEnabled Boolean @default(true)
+  recordingsEnabled Boolean @default(false)
+  momentsEnabled Boolean @default(false)
+  sampleApproval Boolean @default(true)
+  endedAt DateTime?
+  lastMomentAt DateTime?
+  directions Direction[]
+  recordings Recording[]
+  moments Moment[]
   polls           Poll[]
   patternVersions PatternVersion[]
 }
@@ -53,6 +62,9 @@ model Poll {
   openedAt      DateTime?
   closesAt      DateTime?
   status        String
+  dimensionKey String?
+  catalogVersion Int?
+  context Json?
   winningOption String?
   deliveryStatus String?
   closedAt      DateTime?
@@ -60,6 +72,7 @@ model Poll {
   votes         Vote[]
 
   @@unique([roomId, seq])
+  @@unique([roomId, dimensionKey])
 }
 
 model Vote {
@@ -79,6 +92,7 @@ model PatternVersion {
   code      String
   stateDoc  Json?
   source    String
+  context Json?
   baseVersionId String?
   status    String
   appliedAt DateTime?
@@ -121,4 +135,61 @@ model Verification {
   expiresAt  DateTime
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+}
+
+model Direction {
+  revokedThrough Int @default(0)
+  id String @id @default(cuid())
+  roomId String
+  room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  sessionToken String
+  revision Int @default(0)
+  text String
+  interpretation String
+  status String @default("active")
+  outcome String @default("received")
+  updatedAt DateTime @updatedAt
+  revisions DirectionRevision[]
+  @@unique([roomId, sessionToken])
+}
+model DirectionRevision {
+  requestId String? @unique
+  id String @id @default(cuid())
+  directionId String
+  direction Direction @relation(fields: [directionId], references: [id], onDelete: Cascade)
+  revision Int
+  text String
+  interpretation String
+  createdAt DateTime @default(now())
+  @@unique([directionId, revision])
+}
+model Recording {
+  id String @id @default(cuid())
+  roomId String
+  room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  sessionToken String
+  requestId String
+  use String
+  status String @default("processing")
+  reason String?
+  trimStart Float @default(0)
+  trimEnd Float @default(3)
+  duration Float?
+  createdAt DateTime @default(now())
+  appliedAt DateTime?
+  expiresAt DateTime?
+  @@unique([roomId, sessionToken, requestId])
+  @@index([roomId, status, createdAt])
+}
+model Moment {
+  requestId String? @unique
+  id String @id @default(cuid())
+  roomId String
+  room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  sessionToken String
+  action String
+  status String @default("queued")
+  createdAt DateTime @default(now())
+  appliedAt DateTime?
+  @@index([roomId, status, createdAt])
 }

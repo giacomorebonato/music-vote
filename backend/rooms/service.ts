@@ -1,9 +1,18 @@
+import { contributionContextSchema } from '@shared/schemas/contributions'
+import {
+	contextValid,
+	resolveContributionContext,
+} from '@backend/contributions'
 import { prisma } from '@backend/db/client'
 import { getLlmProvider } from '@backend/llm/provider'
 import { generateInitialPattern, generateOutro } from '@backend/music/engine'
 import { performancePattern } from '@backend/music/performance'
 import type { StateDoc } from '@backend/music/state-doc'
-import { armScheduler, disarmScheduler } from '@backend/polls/scheduler'
+import {
+	armScheduler,
+	disarmScheduler,
+	wakeScheduler,
+} from '@backend/polls/scheduler'
 import { hub } from '@backend/realtime/hub'
 import { preferenceQuestions } from '@shared/schemas/preferences'
 import type { createRoomSchema } from '@shared/schemas/room'
@@ -35,6 +44,10 @@ export async function setGrooveLock(
 		})
 		if (!changed.count) throw new Error('Live room not found or access denied')
 		if (locked) {
+			for (const update of await tx.poll.findMany({
+				where: { roomId, deliveryStatus: 'preparing' },
+			}))
+				await resolveContributionContext(tx, roomId, update.context, 'failed')
 			await tx.poll.updateMany({
 				where: { roomId, deliveryStatus: 'preparing' },
 				data: { deliveryStatus: 'failed', resolvedAt: new Date() },
@@ -83,6 +96,8 @@ export async function perform(
 				closedAt: new Date(),
 			},
 		})
+		const nextDoc = { ...(room.stateDoc as unknown as StateDoc) }
+		delete nextDoc.moment
 		return tx.patternVersion.create({
 			data: {
 				roomId,
@@ -90,7 +105,7 @@ export async function perform(
 				source: update.id,
 				baseVersionId: room.currentVersionId,
 				status: 'candidate',
-				stateDoc: room.stateDoc as Prisma.InputJsonObject,
+				stateDoc: nextDoc as unknown as Prisma.InputJsonObject,
 			},
 		})
 	})
@@ -171,6 +186,8 @@ export async function startRoom(
 				roomId,
 				seq: index + 1,
 				kind: 'preference',
+				dimensionKey: question.key,
+				catalogVersion: 1,
 				question: question.question,
 				options: question.options,
 				status: 'open',
@@ -206,7 +223,7 @@ async function closeOpenPoll(roomId: string): Promise<void> {
 async function finalizeRoomEnd(roomId: string): Promise<void> {
 	await prisma.room.update({
 		where: { id: roomId },
-		data: { status: 'ended' },
+		data: { status: 'ended', endedAt: new Date() },
 	})
 	hub.publishAudience(roomId, { type: 'room_ended' })
 	hub.publishHost(roomId, { type: 'room_status', status: 'ended' })
@@ -229,13 +246,34 @@ export async function endRoom(
 	if (room.status === 'live') {
 		const claimed = await prisma.room.updateMany({
 			where: { id: roomId, status: 'live' },
-			data: { status: 'outro' },
+			data: { status: 'outro', endedAt: new Date() },
 		})
 		if (claimed.count === 0) return
 		hub.publishAudience(roomId, { type: 'room_status', status: 'outro' })
 		hub.publishHost(roomId, { type: 'room_status', status: 'outro' })
 	}
 	await cancelPendingUpdates(roomId)
+	await prisma.recording.updateMany({
+		where: {
+			roomId,
+			status: {
+				in: [
+					'uploading',
+					'queued',
+					'processing',
+					'review',
+					'ready',
+					'preparing',
+					'applied',
+				],
+			},
+		},
+		data: { status: 'expired' },
+	})
+	await prisma.moment.updateMany({
+		where: { roomId, status: { in: ['queued', 'preparing'] } },
+		data: { status: 'cancelled' },
+	})
 	await closeOpenPoll(roomId)
 
 	if (room.status === 'lobby') {
@@ -310,6 +348,10 @@ export async function undoLastChange(
 		throw new Error('Room not found or access denied')
 	}
 
+	await prisma.recording.updateMany({
+		where: { roomId, status: { in: ['applied', 'preparing'] } },
+		data: { status: 'expired' },
+	})
 	await cancelPendingUpdates(roomId)
 
 	const current = await prisma.patternVersion.findFirst({
@@ -333,25 +375,49 @@ export async function undoLastChange(
 		return
 	}
 
+	const previousDoc = previous.stateDoc as unknown as StateDoc | null
+	const previousWasMoment = Boolean(previousDoc?.moment)
+	const previousCode = previousDoc?.moment
+		? previousDoc.moment.baseCode
+		: previous.code
+	if (previousDoc) delete previousDoc.moment
 	await prisma.patternVersion.update({
 		where: { id: current.id },
 		data: { status: 'reverted' },
 	})
 
+	let targetId = previous.id
+	if (previousWasMoment) {
+		await prisma.patternVersion.update({
+			where: { id: previous.id },
+			data: { status: 'reverted' },
+		})
+		const restored = await prisma.patternVersion.create({
+			data: {
+				roomId,
+				source: 'undo',
+				status: 'applied',
+				code: previousCode,
+				stateDoc: previousDoc as unknown as Prisma.InputJsonObject,
+				appliedAt: new Date(),
+			},
+		})
+		targetId = restored.id
+	}
 	await prisma.room.update({
 		where: { id: roomId },
 		data: {
-			currentCode: previous.code,
-			currentVersionId: previous.id,
+			currentCode: previousCode,
+			currentVersionId: targetId,
 			...(previous.stateDoc
-				? { stateDoc: previous.stateDoc as Prisma.InputJsonObject }
+				? { stateDoc: previousDoc as unknown as Prisma.InputJsonObject }
 				: {}),
 		},
 	})
 	hub.publishHost(roomId, {
 		type: 'code_update',
-		code: previous.code,
-		versionId: previous.id,
+		code: previousCode,
+		versionId: targetId,
 		kind: 'undo',
 	})
 }
@@ -435,11 +501,21 @@ export async function reportApplyResult(
 
 	if (ok) {
 		const updated = await prisma.$transaction(async (tx) => {
+			if (
+				version.source !== 'outro' &&
+				!(await contextValid(tx, roomId, version.context))
+			)
+				throw new Error('Contribution withdrawn or disabled')
+
 			const claimed = await tx.patternVersion.updateMany({
 				where: { id: versionId, status: 'candidate' },
 				data: { status: 'applied', appliedAt: new Date() },
 			})
 			if (claimed.count === 0) throw new Error('Change was already resolved')
+			const context = contributionContextSchema.safeParse(version.context)
+			const nextDoc = version.stateDoc as unknown as StateDoc | null
+			if (context.success && context.data.momentId && nextDoc?.moment)
+				nextDoc.moment.expiresAt = Date.now() + (8 * 240_000) / room.bpm
 			const roomUpdated = await tx.room.updateMany({
 				where: {
 					id: roomId,
@@ -452,12 +528,13 @@ export async function reportApplyResult(
 					currentCode: version.code,
 					currentVersionId: version.id,
 					...(version.stateDoc
-						? { stateDoc: version.stateDoc as Prisma.InputJsonObject }
+						? { stateDoc: nextDoc as unknown as Prisma.InputJsonObject }
 						: {}),
 				},
 			})
 			if (roomUpdated.count === 0)
 				throw new Error('Change is no longer current')
+			await resolveContributionContext(tx, roomId, version.context, 'applied')
 			if (version.source === 'outro') return 0
 			const pollUpdated = await tx.poll.updateMany({
 				where: { id: version.source, deliveryStatus: 'preparing' },
@@ -469,6 +546,14 @@ export async function reportApplyResult(
 			return pollUpdated.count
 		})
 		if (updated > 0) {
+			const fresh = await prisma.room.findUnique({ where: { id: roomId } })
+			const moment = (fresh?.stateDoc as unknown as StateDoc)?.moment
+			if (moment) wakeScheduler(roomId, moment.expiresAt)
+			const recording = await prisma.recording.findFirst({
+				where: { roomId, status: 'applied', expiresAt: { not: null } },
+			})
+			if (recording?.expiresAt)
+				wakeScheduler(roomId, recording.expiresAt.getTime())
 			hub.publishAudience(roomId, {
 				type: 'music_result',
 				pollId: version.source,
@@ -476,6 +561,7 @@ export async function reportApplyResult(
 		}
 	} else {
 		const rejection = await prisma.$transaction(async (tx) => {
+			await resolveContributionContext(tx, roomId, version.context, 'failed')
 			const rejected = await tx.patternVersion.updateMany({
 				where: { id: versionId, status: 'candidate' },
 				data: { status: 'rejected' },
@@ -507,6 +593,10 @@ export async function reportApplyResult(
 
 async function cancelPendingUpdates(roomId: string): Promise<void> {
 	await prisma.$transaction(async (tx) => {
+		for (const update of await tx.poll.findMany({
+			where: { roomId, deliveryStatus: 'preparing' },
+		}))
+			await resolveContributionContext(tx, roomId, update.context, 'failed')
 		await tx.poll.updateMany({
 			where: { roomId, deliveryStatus: 'preparing' },
 			data: { deliveryStatus: 'failed', resolvedAt: new Date() },

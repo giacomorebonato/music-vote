@@ -40,6 +40,7 @@ export type CodeUpdateEvent = {
 	code: string
 	versionId: string
 	kind: 'initial' | 'evolution' | 'undo' | 'outro'
+	sample?: import('@shared/schemas/contributions').SamplePlayback
 	phraseAligned?: boolean
 }
 

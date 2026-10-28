@@ -55,6 +55,7 @@ beforeAll(async () => {
 	mock.module('@backend/polls/scheduler', () => ({
 		armScheduler: mockScheduler,
 		disarmScheduler: jest.fn(),
+		wakeScheduler: jest.fn(),
 	}))
 	mock.module('@backend/llm/provider', () => ({
 		getLlmProvider: () => mockProvider,
@@ -90,6 +91,58 @@ const baseInput = () => ({
 	pollIntervalSec: 120,
 	pollOpenSec: 45,
 	genre: 'techno',
+})
+
+test('undo restores a consumed audience moment to its base without reviving the event', async () => {
+	const host = await makeHost()
+	const room = await service.createRoom(host.id, baseInput())
+	await prisma.room.update({ where: { id: room.id }, data: { status: 'live' } })
+	const previous = await prisma.patternVersion.create({
+		data: {
+			roomId: room.id,
+			source: 'moment',
+			code: '// music-vote performance\nall(x => x.lpf(500))\ns("bd")',
+			status: 'applied',
+			appliedAt: new Date(Date.now() - 1000),
+			stateDoc: {
+				moment: {
+					id: 'consumed',
+					baseCode: 's("bd")',
+					expiresAt: Date.now() + 10000,
+				},
+			},
+		},
+	})
+	const current = await prisma.patternVersion.create({
+		data: {
+			roomId: room.id,
+			source: 'crowd',
+			code: 's("bd sd")',
+			status: 'applied',
+			appliedAt: new Date(),
+		},
+	})
+	await prisma.room.update({
+		where: { id: room.id },
+		data: { currentCode: current.code, currentVersionId: current.id },
+	})
+	await service.undoLastChange(room.id, host.id)
+	const restored = await prisma.room.findUniqueOrThrow({
+		where: { id: room.id },
+	})
+	const target = await prisma.patternVersion.findUniqueOrThrow({
+		where: { id: restored.currentVersionId! },
+	})
+	expect(target.code).toBe('s("bd")')
+	expect(target.code).toBe(restored.currentCode!)
+	expect(restored.stateDoc).not.toHaveProperty('moment')
+	expect(
+		(
+			await prisma.patternVersion.findUniqueOrThrow({
+				where: { id: previous.id },
+			})
+		).status,
+	).toBe('reverted')
 })
 
 test('createRoom creates lobby with lengthSec = lengthMin * 60', async () => {
@@ -156,7 +209,7 @@ test('startRoom makes room live, applies initial version, sets currentCode, arms
 	expect(versions[0].status).toBe('applied')
 
 	const polls = await prisma.poll.findMany({ where: { roomId: room.id } })
-	expect(polls).toHaveLength(3)
+	expect(polls).toHaveLength(7)
 	expect(
 		polls.every(
 			(poll) =>
@@ -380,7 +433,7 @@ test('legacy skip does not close persistent questions', async () => {
 	await service.startRoom(room.id, host.id)
 	await service.skipPoll(room.id, host.id)
 	const questions = await prisma.poll.findMany({ where: { roomId: room.id } })
-	expect(questions).toHaveLength(3)
+	expect(questions).toHaveLength(7)
 	expect(
 		questions.every(
 			(question) =>

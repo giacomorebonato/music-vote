@@ -64,7 +64,7 @@ export function claimSession(): { token: string } {
 export async function castVote(
 	pollId: string,
 	token: string,
-	choice: string,
+	choice: string | null,
 ): Promise<void> {
 	const poll = await prisma.poll.findUnique({ where: { id: pollId } })
 	if (!poll) {
@@ -78,7 +78,7 @@ export async function castVote(
 	}
 
 	const options = parseOptions(poll.options)
-	if (!options.some((option) => option.key === choice)) {
+	if (choice !== null && !options.some((option) => option.key === choice)) {
 		throw new TRPCError({ code: 'BAD_REQUEST', message: 'INVALID_CHOICE' })
 	}
 
@@ -97,7 +97,11 @@ export async function castVote(
 					code: 'BAD_REQUEST',
 					message: 'Room is not live',
 				})
-			if (current.kind === 'preference') {
+			if (choice === null) {
+				if (current.kind !== 'preference')
+					throw new TRPCError({ code: 'BAD_REQUEST' })
+				await tx.vote.deleteMany({ where: { pollId, sessionToken: token } })
+			} else if (current.kind === 'preference') {
 				await tx.vote.upsert({
 					where: { pollId_sessionToken: { pollId, sessionToken: token } },
 					create: { pollId, sessionToken: token, choice },

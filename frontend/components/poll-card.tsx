@@ -10,7 +10,7 @@ export function PollCard({
 	question: CrowdQuestion
 	pending: boolean
 	disabled: boolean
-	onVote: (choice: string) => void
+	onVote: (choice: string | null) => void
 }) {
 	const total = Object.values(question.counts).reduce(
 		(sum, count) => sum + count,
@@ -56,6 +56,16 @@ export function PollCard({
 						)
 					})}
 				</div>
+				{question.choice !== null ? (
+					<button
+						type="button"
+						className="btn btn-ghost btn-sm self-start"
+						disabled={disabled || pending}
+						onClick={() => onVote(null)}
+					>
+						Clear answer
+					</button>
+				) : null}
 				<p className="text-xs opacity-60">
 					{total} {total === 1 ? 'answer' : 'answers'}
 				</p>

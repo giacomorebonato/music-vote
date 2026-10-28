@@ -22,3 +22,10 @@ Target: app `music-vote` on Fly.io. Infra files live in repo: `Dockerfile` (mult
 - **Open**: `flyctl apps open` → `https://music-vote.fly.dev`.
 - **Rename**: this repo's app and volume were renamed from the starter's `mino-starter` / `mino_starter_data` to `music-vote` / `music_vote_data`, and nothing migrates data for you — an existing starter deployment's volume is not carried over, so a fresh `fly apps create` here starts from an empty volume.
 - **Caveats**: single-machine only (SQLite volume). `better-auth` sessions rely on `BETTER_AUTH_SECRET` — rotating it logs out all users. Devtools are dev-only and excluded from the prod bundle via the `scripts/build.ts` stub plugin.
+
+Crowd recordings use `/data/recordings` on that same volume. The runtime image
+installs FFmpeg; the Bun server runs a single bounded decoder process. Upload
+and audio endpoints are registered in development and production. Keep recorded
+sounds opt-in until microphone capture and PA quality have been rehearsed on
+physical phones. See the recording operations section in `music-vote.md` for
+limits, retention, restart behavior, and local setup.

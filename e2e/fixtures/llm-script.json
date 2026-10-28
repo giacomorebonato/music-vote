@@ -4,5 +4,8 @@
 	],
 	"crowdResponses": [
 		"s(\"bd sd cp hh\").gain(0.7)\nnote(\"c2 eb2 g2\").s(\"sawtooth\").lpf(900)"
+	],
+	"directionResponses": [
+		"{\"kind\": \"preference\", \"targets\": [{\"dimension\": \"bass\", \"choice\": \"bouncy\"}, {\"dimension\": \"space\", \"choice\": \"spacious\"}]}"
 	]
 }

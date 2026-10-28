@@ -19,7 +19,7 @@ test('all questions stay present while generation is pending', () => {
 	const markup = renderToStaticMarkup(
 		<VoteView {...baseProps} roomStatus="live" deliveryStatus="preparing" />,
 	)
-	expect(markup.match(/data-testid="preference-question"/g)).toHaveLength(3)
+	expect(markup.match(/data-testid="preference-question"/g)).toHaveLength(7)
 	expect(markup).toContain('Change your mind anytime')
 	expect(markup).not.toContain('disabled=""')
 	expect(markup).not.toContain('countdown')
@@ -37,7 +37,7 @@ test('ended shows the crowd distribution with no winner or interactive controls'
 		<VoteView {...baseProps} roomStatus="ended" />,
 	)
 	expect(markup).toContain('Thanks for the dance')
-	expect(markup.match(/disabled=""/g)).toHaveLength(9)
+	expect(markup.match(/disabled=""/g)).toHaveLength(21)
 	expect(markup).not.toContain('wins')
 })
 test('failed generation does not claim a musical change played', () => {

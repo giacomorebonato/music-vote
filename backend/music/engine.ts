@@ -207,9 +207,10 @@ export async function generateCrowdEvolution(
 	doc: StateDoc,
 	snapshot: import('@shared/schemas/preferences').CrowdSnapshot,
 	currentCode: string,
+	context?: import('@shared/schemas/contributions').ContributionContext,
 ): Promise<{ code: string } | 'hold' | null> {
 	const { buildCrowdPrompt } = await import('@backend/music/prompts')
-	const prompt = buildCrowdPrompt(doc, snapshot, currentCode)
+	const prompt = buildCrowdPrompt(doc, snapshot, currentCode, context)
 	for (let attempt = 0; attempt < MAX_CODE_ATTEMPTS; attempt++) {
 		try {
 			const raw = await provider.chat(prompt)

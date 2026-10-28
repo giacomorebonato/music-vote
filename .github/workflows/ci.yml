@@ -25,6 +25,7 @@ jobs:
         env:
           DATABASE_URL: file:./dev.db
       - run: bun x playwright install --with-deps chromium
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: bun run verify
 
   deploy:

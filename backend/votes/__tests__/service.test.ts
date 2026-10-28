@@ -462,7 +462,7 @@ test('persistent questions replace answers, restore selections and broadcast the
 		callerCtx({ headers: { cookie: 'mv_session=listener-a' } }),
 	)
 	const initial = await caller.crowd({ roomId: room.id })
-	expect(initial.questions).toHaveLength(3)
+	expect(initial.questions).toHaveLength(7)
 	const energy = initial.questions[0]!
 	await caller.castVote({ pollId: energy.id, choice: 'mellow' })
 	await caller.castVote({ pollId: energy.id, choice: 'intense' })
@@ -501,6 +501,10 @@ test('answers are independent across questions and refused after the room ends',
 	expect(restored.map((question) => question.choice)).toEqual([
 		'mellow',
 		'busy',
+		null,
+		null,
+		null,
+		null,
 		null,
 	])
 	await prisma.room.update({

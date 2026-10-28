@@ -17,6 +17,7 @@ type StateDocHistoryEntry = {
 
 export type StateDoc = {
 	genre: string
+	moment?: { id: string; baseCode: string; expiresAt: number }
 	bpm: number
 	elements: StateDocElements
 	history: StateDocHistoryEntry[]

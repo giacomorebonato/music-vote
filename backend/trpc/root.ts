@@ -1,3 +1,4 @@
+import { contributionsRouter } from '@backend/trpc/contributions'
 import type { Context } from '@backend/trpc/context'
 import { publicRouter } from '@backend/trpc/public'
 import { roomsRouter } from '@backend/trpc/rooms'
@@ -8,6 +9,7 @@ const t = initTRPC.context<Context>().create()
 
 export const appRouter = t.router({
 	public: publicRouter,
+	contributions: contributionsRouter,
 	rooms: roomsRouter,
 	voting: votingRouter,
 })

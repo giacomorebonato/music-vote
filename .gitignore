@@ -27,3 +27,6 @@ apm_modules/
 
 # Prisma generated client (Rust-free generator)
 prisma/generated/
+
+.recordings/
+prisma/contributions-test.db

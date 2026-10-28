@@ -1,3 +1,8 @@
+import {
+	handleRecordingRequest,
+	recoverRecordings,
+	cleanupRecordings,
+} from '@backend/recordings'
 import { auth } from '@backend/auth/auth'
 import { bootSchedulers } from '@backend/boot'
 import { prisma } from '@backend/db/client'
@@ -56,6 +61,11 @@ if (!isDev) {
 // 405) and from the prod `fetch` handler.
 async function handleApi(req: Request): Promise<Response> {
 	const url = new URL(req.url)
+	if (
+		url.pathname === '/api/recordings' ||
+		url.pathname.startsWith('/api/recordings/')
+	)
+		return handleRecordingRequest(req)
 	if (url.pathname.startsWith(TRPC_ENDPOINT)) {
 		const trpcReq = normalizeTrpcRequest(req, url)
 		return fetchRequestHandler({
@@ -76,6 +86,7 @@ async function handleApi(req: Request): Promise<Response> {
 
 const httpServer = Bun.serve<SocketData>({
 	port,
+	maxRequestBodySize: 2_200_000,
 	...(isDev
 		? {
 				// Dev: register /api/* as explicit function routes so they take
@@ -87,6 +98,8 @@ const httpServer = Bun.serve<SocketData>({
 				// /ws is also registered as a route so Bun can upgrade it from the
 				// routes path (the route returns undefined after server.upgrade).
 				routes: {
+					'/api/recordings': handleApi,
+					'/api/recordings/*': handleApi,
 					'/api/auth/*': handleApi,
 					'/api/trpc/*': handleApi,
 					'/ws': handleWs,
@@ -142,3 +155,12 @@ console.log(`music-vote on http://localhost:${httpServer.port}`)
 // Re-arm timers for rooms that were mid-set when the process stopped. Failures
 // are logged and non-fatal (see backend/boot.ts).
 await bootSchedulers()
+
+await recoverRecordings().catch((error) =>
+	console.error('Recording recovery failed', error),
+)
+setInterval(() => {
+	void cleanupRecordings().catch((error) =>
+		console.error('Recording cleanup failed', error),
+	)
+}, 60_000).unref()

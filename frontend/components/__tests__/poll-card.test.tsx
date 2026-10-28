@@ -50,6 +50,6 @@ test('pending saves and ended sets disable answer submission', () => {
 		const markup = renderToStaticMarkup(
 			<PollCard question={question} {...props} onVote={() => {}} />,
 		)
-		expect(markup.match(/disabled=""/g)).toHaveLength(2)
+		expect(markup.match(/disabled=""/g)).toHaveLength(3)
 	}
 })

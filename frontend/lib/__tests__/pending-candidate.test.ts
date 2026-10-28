@@ -36,6 +36,7 @@ test('returns the newest candidate as an evolution code_update for a live room',
 		code: 's("bd sd")',
 		versionId: 'newest',
 		kind: 'evolution',
+		phraseAligned: true,
 	})
 })
 

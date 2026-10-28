@@ -218,3 +218,11 @@ export async function applyPattern(
 export function stopStrudel(): void {
 	hush()
 }
+
+/** Convert the next four-bar boundary on Strudel's clock to Web Audio time. */
+export function phraseAudioTime(bpm: number): number {
+	const ac = getAudioContext()
+	const cycle = scheduler?.now() ?? 0
+	const boundary = Math.ceil((cycle - 0.05) / 4) * 4
+	return ac.currentTime + Math.max(0.01, ((boundary - cycle) * 240) / bpm)
+}

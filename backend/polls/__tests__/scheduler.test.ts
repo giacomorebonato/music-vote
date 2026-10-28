@@ -145,13 +145,13 @@ afterAll(async () => {
 	await prisma.user.deleteMany({ where: { id: { in: userIds } } })
 })
 
-test('three stable questions stay open indefinitely, with no deadline or end poll', async () => {
+test('seven stable questions stay open indefinitely, with no deadline or end poll', async () => {
 	const room = await makeRoom()
 	await boot(room.id)
 	await advance(100_000)
 	expect(generate).not.toHaveBeenCalled()
 	const questions = await prisma.poll.findMany({ where: { roomId: room.id } })
-	expect(questions).toHaveLength(3)
+	expect(questions).toHaveLength(7)
 	expect(
 		questions.every(
 			(question) =>
@@ -172,7 +172,7 @@ test('checks at 10 seconds and sends every count, including an even split and un
 	await advance(1)
 	expect(generate).toHaveBeenCalledTimes(1)
 	const snapshot = generate.mock.calls[0]![2] as CrowdSnapshot
-	expect(snapshot).toHaveLength(3)
+	expect(snapshot).toHaveLength(7)
 	expect(snapshot[0]!.counts).toEqual({ mellow: 1, balanced: 0, intense: 1 })
 	expect(snapshot[1]!.counts).toEqual({ steady: 0, flowing: 0, busy: 0 })
 	expect(JSON.stringify(snapshot)).not.toContain('sessionToken')
@@ -332,7 +332,7 @@ test('restart preserves questions and last submitted snapshot without replaying 
 	expect(generate).toHaveBeenCalledTimes(1)
 	expect(
 		await prisma.poll.count({ where: { roomId: room.id, kind: 'preference' } }),
-	).toBe(3)
+	).toBe(7)
 })
 
 test('recovery converts a legacy room and retires its timed polls', async () => {
@@ -357,7 +357,7 @@ test('recovery converts a legacy room and retires its timed polls', async () => 
 		await prisma.poll.count({
 			where: { roomId: room.id, kind: 'preference', status: 'open' },
 		}),
-	).toBe(3)
+	).toBe(7)
 })
 
 test('disarm prevents a late generation from publishing music', async () => {
@@ -505,4 +505,165 @@ test('performance candidate blocks crowd generation until host confirms it', asy
 	await service.reportApplyResult(room.id, room.hostId, version.id, true)
 	await advance(10_000)
 	expect(generate).toHaveBeenCalledTimes(1)
+})
+
+test('a text direction alone participates, and unchanged revisions do not repeat generation', async () => {
+	generate.mockResolvedValue('hold')
+	const room = await makeRoom()
+	const intent = {
+		kind: 'preference',
+		targets: [{ dimension: 'space', choice: 'spacious' }],
+	}
+	await prisma.direction.create({
+		data: {
+			roomId: room.id,
+			sessionToken: 'private-phone',
+			revision: 1,
+			text: 'underwater',
+			interpretation: JSON.stringify(intent),
+		},
+	})
+	await boot(room.id)
+	await advance(10_000)
+	expect(generate).toHaveBeenCalledTimes(1)
+	const context = generate.mock.calls[0]?.[4]
+	expect(context.directions[0].intent).toEqual(intent)
+	expect(JSON.stringify(context)).not.toContain('private-phone')
+	expect(JSON.stringify(context)).not.toContain('underwater')
+	await advance(10_000)
+	expect(generate).toHaveBeenCalledTimes(1)
+	expect(
+		(await prisma.direction.findFirstOrThrow({ where: { roomId: room.id } }))
+			.outcome,
+	).toBe('held')
+})
+
+test('a cleared then replaced direction cannot revive the revoked in-flight revision', async () => {
+	let finish!: (value: { code: string }) => void
+	generate.mockImplementationOnce(
+		() =>
+			new Promise((resolve) => {
+				finish = resolve
+			}),
+	)
+	const room = await makeRoom()
+	const direction = await prisma.direction.create({
+		data: {
+			roomId: room.id,
+			sessionToken: 'phone',
+			revision: 1,
+			text: 'bouncy',
+			interpretation: JSON.stringify({
+				kind: 'preference',
+				targets: [{ dimension: 'bass', choice: 'bouncy' }],
+			}),
+		},
+	})
+	await boot(room.id)
+	await advance(10_000)
+	await prisma.direction.update({
+		where: { id: direction.id },
+		data: {
+			revokedThrough: 1,
+			revision: 2,
+			text: 'deep',
+			interpretation: JSON.stringify({
+				kind: 'preference',
+				targets: [{ dimension: 'bass', choice: 'deep' }],
+			}),
+		},
+	})
+	finish({ code: 's("bd sd")' })
+	await settle()
+	expect(
+		await prisma.patternVersion.count({
+			where: { roomId: room.id, status: 'candidate' },
+		}),
+	).toBe(0)
+})
+
+test('ready recordings use the serialized delivery path and expire without any new answers', async () => {
+	const room = await makeRoom()
+	await prisma.room.update({
+		where: { id: room.id },
+		data: { recordingsEnabled: true },
+	})
+	const recording = await prisma.recording.create({
+		data: {
+			roomId: room.id,
+			sessionToken: 'phone',
+			requestId: 'sample',
+			use: 'percussion',
+			status: 'ready',
+			duration: 0.5,
+		},
+	})
+	await boot(room.id)
+	await advance(10_000)
+	expect(generate).not.toHaveBeenCalled()
+	const candidate = await prisma.patternVersion.findFirstOrThrow({
+		where: { roomId: room.id, status: 'candidate' },
+	})
+	expect(candidate.context).toMatchObject({
+		recordingId: recording.id,
+		directions: [],
+	})
+	await service.reportApplyResult(room.id, room.hostId, candidate.id, true)
+	const played = await prisma.recording.findUniqueOrThrow({
+		where: { id: recording.id },
+	})
+	expect(played.expiresAt!.getTime() - played.appliedAt!.getTime()).toBe(16_000)
+	await prisma.recording.update({
+		where: { id: recording.id },
+		data: { expiresAt: new Date(time + 1000) },
+	})
+	scheduler.wakeScheduler(room.id, time + 1000)
+	await advance(1000)
+	expect(
+		(await prisma.recording.findUniqueOrThrow({ where: { id: recording.id } }))
+			.status,
+	).toBe('expired')
+	expect(generate).not.toHaveBeenCalled()
+})
+
+test('audience moments fire once and restore the underlying groove even while locked', async () => {
+	const room = await makeRoom()
+	await prisma.room.update({
+		where: { id: room.id },
+		data: { momentsEnabled: true },
+	})
+	const moment = await prisma.moment.create({
+		data: { roomId: room.id, sessionToken: 'phone', action: 'build' },
+	})
+	await boot(room.id)
+	await advance(10_000)
+	const candidate = await prisma.patternVersion.findFirstOrThrow({
+		where: { roomId: room.id, status: 'candidate' },
+	})
+	expect(candidate.code).toContain('music-vote performance')
+	await service.reportApplyResult(room.id, room.hostId, candidate.id, true)
+	expect(
+		(await prisma.moment.findUniqueOrThrow({ where: { id: moment.id } }))
+			.status,
+	).toBe('applied')
+	await prisma.room.update({
+		where: { id: room.id },
+		data: {
+			grooveLocked: true,
+			stateDoc: {
+				moment: {
+					id: moment.id,
+					baseCode: 's("bd")',
+					expiresAt: time + 16_000,
+				},
+			},
+		},
+	})
+	scheduler.wakeScheduler(room.id, time + 16_000)
+	await advance(16_000)
+	const restored = await prisma.patternVersion.findFirstOrThrow({
+		where: { roomId: room.id, status: 'candidate' },
+	})
+	expect(restored.code).toBe('s("bd")')
+	expect(generate).not.toHaveBeenCalled()
 })

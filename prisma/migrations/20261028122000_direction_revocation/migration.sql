@@ -1,0 +1,1 @@
+ALTER TABLE "Direction" ADD COLUMN "revokedThrough" INTEGER NOT NULL DEFAULT 0;

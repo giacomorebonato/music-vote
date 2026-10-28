@@ -7,39 +7,62 @@ import {
 /** Reuse durable poll/vote storage; preference polls never have deadlines. */
 export async function ensurePreferenceQuestions(roomId: string): Promise<void> {
 	await prisma.$transaction(async (tx) => {
-		const existing = await tx.poll.count({
-			where: { roomId, kind: 'preference' },
-		})
-		if (existing > 0) return
 		const room = await tx.room.findUnique({ where: { id: roomId } })
 		if (room?.status !== 'live') return
-		// Older live rooms switch to continuous input on scheduler recovery.
-		await tx.poll.updateMany({
-			where: { roomId, status: { in: ['open', 'queued'] } },
-			data: {
-				status: 'closed',
-				winningOption: null,
-				deliveryStatus: 'unchanged',
-				resolvedAt: new Date(),
-			},
+		const existing = await tx.poll.findMany({
+			where: { roomId, kind: 'preference' },
 		})
-		await tx.poll.updateMany({
-			where: { roomId, deliveryStatus: 'preparing' },
-			data: { deliveryStatus: 'failed', resolvedAt: new Date() },
-		})
-		await tx.patternVersion.updateMany({
-			where: { roomId, status: 'candidate', source: { not: 'outro' } },
-			data: { status: 'rejected' },
-		})
+		// Preserve old questions and votes, assigning identity by their known wording.
+		for (const poll of existing) {
+			const definition = preferenceQuestions.find(
+				(q) => q.question === poll.question,
+			)
+			if (
+				!poll.dimensionKey &&
+				definition &&
+				!existing.some((p) => p.dimensionKey === definition.key)
+			)
+				await tx.poll.update({
+					where: { id: poll.id },
+					data: { dimensionKey: definition.key, catalogVersion: 1 },
+				})
+		}
+		if (existing.length === 0) {
+			await tx.poll.updateMany({
+				where: { roomId, status: { in: ['open', 'queued'] } },
+				data: {
+					status: 'closed',
+					winningOption: null,
+					deliveryStatus: 'unchanged',
+					resolvedAt: new Date(),
+				},
+			})
+			await tx.poll.updateMany({
+				where: { roomId, deliveryStatus: 'preparing' },
+				data: { deliveryStatus: 'failed', resolvedAt: new Date() },
+			})
+			await tx.patternVersion.updateMany({
+				where: { roomId, status: 'candidate', source: { not: 'outro' } },
+				data: { status: 'rejected' },
+			})
+		}
+		const missing = preferenceQuestions.filter(
+			(q) =>
+				!existing.some(
+					(p) => p.dimensionKey === q.key || p.question === q.question,
+				),
+		)
 		const last = await tx.poll.findFirst({
 			where: { roomId },
 			orderBy: { seq: 'desc' },
 		})
 		await tx.poll.createMany({
-			data: preferenceQuestions.map((question, index) => ({
+			data: missing.map((question, index) => ({
 				roomId,
 				seq: (last?.seq ?? 0) + index + 1,
 				kind: 'preference',
+				dimensionKey: question.key,
+				catalogVersion: 1,
 				question: question.question,
 				options: question.options,
 				status: 'open',

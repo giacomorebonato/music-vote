@@ -6,6 +6,7 @@ type VersionRow = {
 	code: string
 	source: string
 	status: string
+	sample?: import('@shared/schemas/contributions').SamplePlayback | null
 }
 
 /**
@@ -35,8 +36,7 @@ export function pickPendingCandidate(
 		code: pending.code,
 		versionId: pending.id,
 		kind: pending.source === 'outro' ? 'outro' : 'evolution',
-		...(pending.code.startsWith('// music-vote performance\n')
-			? { phraseAligned: true }
-			: {}),
+		...(pending.sample ? { sample: pending.sample } : {}),
+		...(pending.source !== 'outro' ? { phraseAligned: true } : {}),
 	}
 }

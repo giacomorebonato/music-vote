@@ -1,3 +1,5 @@
+import { contributionContextSchema } from '@shared/schemas/contributions'
+import { samplePlayback } from '@backend/recordings'
 import {
 	createRoom,
 	endRoom,
@@ -94,9 +96,29 @@ export const roomsRouter = t.router({
 					voteCounts[row.choice] = row._count.choice
 				}
 			}
+			const replayVersions = await Promise.all(
+				versions.map(async (v) => {
+					const context = contributionContextSchema.safeParse(v.context)
+					const recording =
+						context.success &&
+						context.data.recordingId &&
+						v.status === 'candidate'
+							? await ctx.prisma.recording.findUnique({
+									where: { id: context.data.recordingId },
+								})
+							: null
+					return {
+						...v,
+						sample:
+							recording?.status === 'preparing'
+								? samplePlayback(recording, room.bpm)
+								: null,
+					}
+				}),
+			)
 			return {
 				room,
-				versions,
+				versions: replayVersions,
 				// Shape the wire response so the client never has to narrow Prisma's
 				// recursive Json column (the host console renders options generically).
 				openPoll: openPoll

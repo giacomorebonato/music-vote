@@ -75,9 +75,9 @@ test('persistent crowd preferences remain editable across updates, reloads and s
 			timeout: 30_000,
 		})
 		await host.getByTestId('vote-url').click()
-		await expect(phoneA.getByTestId('preference-question')).toHaveCount(3)
-		await expect(phoneB.getByTestId('preference-question')).toHaveCount(3)
-		await expect(host.getByTestId('poll-monitor')).toHaveCount(3)
+		await expect(phoneA.getByTestId('preference-question')).toHaveCount(7)
+		await expect(phoneB.getByTestId('preference-question')).toHaveCount(7)
+		await expect(host.getByTestId('poll-monitor')).toHaveCount(7)
 		await expect(phoneA.getByTestId('poll-countdown')).toHaveCount(0)
 		await expect
 			.poll(() => audioStarts(host), { timeout: 30_000 })
@@ -157,7 +157,7 @@ test('persistent crowd preferences remain editable across updates, reloads and s
 			{ timeout: 30_000 },
 		)
 		await expect(host.getByTestId('apply-status')).toHaveText('change applied')
-		await expect(phoneA.getByTestId('preference-question')).toHaveCount(3)
+		await expect(phoneA.getByTestId('preference-question')).toHaveCount(7)
 		await phoneA.getByTestId('vote-option-bright').click()
 		await expect(phoneB.getByTestId('vote-option-bright')).toContainText(
 			'1 · 100%',

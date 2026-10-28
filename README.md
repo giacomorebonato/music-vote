@@ -2,9 +2,9 @@
 
 Crowd-guided AI live music. A host opens a room at a venue, picks a vibe, and
 plays music from the host's browser into the PA. Phones join by scanning a QR
-code, with no login or app. Three persistent questions — energy, rhythm and
-mood — show the room's preferences on phones and the host screen. Answer any
-question and change your mind anytime; each phone's latest answer counts once.
+code, with no login or app. Seven persistent questions — energy, rhythm, mood, bass, melody, texture and
+space — show the room's preferences on phones and the host screen. Answer any
+question, clear it, and change your mind anytime; each phone's latest answer counts once.
 
 There are no winners, voting deadlines or majority decisions. Live counts are
 for fun. Every 10 seconds the server checks for a changed crowd distribution
@@ -13,6 +13,42 @@ already fits. Updates are serialized through host playback confirmation;
 answers collected in the meantime feed the next snapshot. An AI outro closes
 the set, and phones retain the final crowd distribution. The server owns room
 state; the host browser is the audio engine.
+
+## Crowd contributions
+
+Listeners can keep one editable text direction, such as “bouncy bass, but keep the
+drums chilled.” Review its interpretation before activating it. The server maps
+text to the available musical controls; raw audience text never enters generated
+code. Replacing a direction replaces its influence. Clearing it withdraws it.
+Directions are private to their author and the host. Received, held, failed, and
+included-in-a-confirmed-update are separate outcomes.
+
+The host's **Crowd contributions** controls enable recorded sounds and audience
+moments, both initially off. **Approve sounds first** is initially on. A listener
+can record up to three seconds, preview it, trim it, and submit it as percussion,
+a chopped hook, or atmosphere. The host can audition, approve, or remove clips;
+audition uses the browser's output, including the PA. A listener can withdraw a
+clip. Approved clips enter a bounded queue and play as a separate accompaniment
+on the host's four-bar musical clock for eight bars. The original sound is heard
+first; later hits can become rhythmic slices. Reload recovers the remaining
+lifetime, and undo never resurrects expired or withdrawn sounds.
+
+Recording requires microphone permission and HTTPS (localhost also works).
+Install **FFmpeg** for local development (`brew install ffmpeg` on macOS); the
+production image and CI install it. The server processes one clip at a time into
+mono WAV, with duration/size limits, peak control, and short fades. Audio files
+live in `.recordings/` locally and `/data/recordings` in production. The model
+never loads arbitrary sample URLs or produces sample-loading code. A trusted
+Web Audio layer owns sample placement and expiry independently of generation.
+
+Optional audience **Build up**, **Drop**, and **Strip back** requests are one-shot
+moments, with one outstanding request per phone and a room cooldown. They restore
+the underlying groove after a bounded section. Host lock pauses new automatic
+contributions while people keep editing. Ending the set closes contribution input.
+
+Automated tests cover real browser recording with a simulated microphone and
+WAV/WebM/MP4 processing. Physical iOS/Android capture near a PA and real-model
+musical quality still need a venue rehearsal before enabling recordings at an event.
 
 ## Performing live
 

@@ -1,18 +1,22 @@
 # music-vote — Design Spec
 
-Updated: 2026-10-27. Continuous crowd preferences supersede the original timed majority-vote design and the timed-round portions of the 2026-10-16 party-experience plan.
+Updated: 2026-10-28. Continuous crowd preferences supersede the original timed majority-vote design and the timed-round portions of the 2026-10-16 party-experience plan.
 
 ## Experience
 
 A host chooses genre, BPM, and set length, starts music in their browser, and shares a QR code. Audience phones join without accounts or audio playback. The host browser plays Strudel through the venue sound system.
 
-Three stable questions remain available for the whole live set:
+Seven stable questions remain available for the whole live set:
 
 - Energy: mellow / balanced / intense.
 - Rhythm: steady / flowing / busy.
 - Mood: dark / warm / bright.
+- Bass: deep pulses / bouncy / rolling.
+- Melody: minimal / repeat the hook / playful.
+- Texture: smooth / gritty / sharp.
+- Space: close and dry / echoing / spacious.
 
-Answer any subset, at any time. A phone's latest answer replaces its previous answer for that question. Saved selections survive reloads through the existing anonymous session cookie. Preferences remain until changed or the set ends; locking a phone or losing its socket does not remove its answers.
+Answer any subset, at any time. A phone's latest answer replaces its previous answer for that question; clearing removes that answer. Saved selections survive reloads through the existing anonymous session cookie. Preferences remain until changed or the set ends; locking a phone or losing its socket does not remove its answers.
 
 Phones and the host screen display the complete distribution of current answers, for fun. There is no winner, majority rule, final result reveal, countdown, voting window, or end-of-set vote. Host controls retain undo and end. Room setup has no round timing controls.
 
@@ -49,3 +53,48 @@ The configured set length ends the live set, or the host can end early. Input cl
 Unit and integration coverage includes answer replacement, independent questions, session continuity, public distributions without session identifiers, even splits, unchanged counts, coalescing during slow generation, hold/failure, host confirmation/rejection, stale versions, timeout, undo, restart, and legacy-room recovery.
 
 The browser suite exercises two anonymous phones, host counts, a narrow phone reload, editable choices across music updates, real Web Audio activity, undo, outro, and final playback stop. Production SSR has its own browser suite. Run `bun run verify` before declaring the implementation complete. Real-model musical quality and phrase timing still require a listening session; mock generation only verifies behavior and delivery.
+
+## Text, recording, and moment contributions
+
+Implemented extension: `docs/superpowers/plans/2026-10-28-crowd-contributions.md`.
+Preferences remain continuously editable; this does not reinstate timed voting.
+A current text direction per phone is translated into schema-validated catalog
+choices and reviewed before activation. Signed, expiring review tokens bind the
+exact text and interpretation to its room and author. Immutable revisions record
+submissions. Repeating a submitted token is idempotent. New revisions coalesce
+with crowd checks, and withdrawn/dismissed revisions cannot return after replacement.
+Raw text and session identifiers are excluded from music prompts; the agent sees
+bounded musical targets. Up to 100 current text directions are admitted per room.
+The host can pause text and dismiss individual directions.
+
+Recordings and audience moments start disabled and are controlled separately by
+the host. Recordings default to host approval, with one pending clip per phone,
+a 30-second submission limit, ten waiting clips per room, twenty across the server, and a 2 MiB upload cap.
+MediaRecorder selects a supported browser codec. A single bounded FFmpeg worker
+validates and prepares up to three seconds of mono PCM audio, controlling peaks
+and edge clicks. Binary uploads use the existing Bun HTTP server, while tRPC
+handles metadata and moderation. Room-scoped signed URLs expire after a short
+period. Originals and processed files are not a public sample library.
+
+Ready recordings share the one-candidate delivery path. The host decodes before
+applying, rechecks candidate eligibility at the musical boundary, and schedules
+a trusted Web Audio accompaniment using the Strudel clock. There is one active
+crowd sample layer, with a recognizable first appearance and an eight-bar
+lifetime enforced by scheduled audio stops as well as server expiry. This layer
+is deliberately outside generated code so normal generation cannot accidentally
+retain it. Recovery uses the remaining absolute lifetime. Withdrawal, host
+removal, undo, and end stop or invalidate the relevant work. Expired and removed
+sounds are never restored by undo.
+
+Build/drop/strip-back requests are consumed only on host confirmation, have a
+30-second room cooldown, and restore their underlying groove after eight bars.
+Restoration may wait for the next phrase or an already preparing update. It runs
+while the groove is locked, so locking cannot leave a temporary action stuck.
+Unchanged input does not replay consumed events.
+
+All contribution outcomes distinguish receipt from confirmed application.
+Directions included in an applied candidate are described as included, rather
+than claiming that the model's audible interpretation was independently measured.
+Automated verification covers simulated browser capture and real codec processing;
+physical phone recording, PA bleed, and real-model musical quality require a
+separate rehearsal. Recording remains opt-in for each room.

@@ -153,3 +153,38 @@ production probe, MiniMax's default thinking timed out at both 25 and 90 seconds
   host player may be mounted at a time — unmounting calls `hush()`.
 - **Phones never hear audio.** Voting only; the sound comes from the host
   machine into the PA.
+
+## Crowd contributions and recording operations
+
+Seven preference dimensions upgrade existing live rooms additively. Stable keys
+and catalog version 1 preserve the original energy/rhythm/mood choices and votes.
+Text directions default on; recorded sounds and audience moments default off.
+The host enables them in Crowd contributions. Sound approval defaults on.
+
+- `FFMPEG_PATH` defaults to `ffmpeg`. Install FFmpeg locally; Docker and CI install
+  the distribution package. Bun invokes it directly without a shell. The worker
+  has one concurrent decoder, a 15-second deadline, a restricted input format and
+  protocol list, a maximum allocation, a three-second output cap, and mono 24 kHz WAV output.
+- `RECORDINGS_DIR` defaults to `.recordings`; the production image sets it to
+  `/data/recordings` on the existing Fly volume. Keep the single-machine constraint.
+- `RECORDINGS_RETENTION_HOURS` defaults to 24 after the room closes. Cleanup runs
+  at boot and every minute. Withdrawn, rejected, and failed files are deleted on
+  the next cleanup; expired live-room assets remain inaccessible until cleanup
+  after the room's retention deadline. Old orphan files are removed as well.
+- Uploads are capped at 2 MiB and rejected when fewer than 32 MiB of disk remain.
+  One pending upload per phone, ten queued clips per room, twenty across the server, and a 30-second phone
+  interval bound processing and storage. Retries with
+  the same idempotency key retrieve the existing outcome; re-recording uses a fresh key.
+- After restart, interrupted uploads fail visibly and interrupted processing is
+  queued again. Ready assets stay durable. Pending sample candidates recover via
+  the existing version replay, with renewed asset access tickets.
+- The host browser's microphone is not required. Listener microphone permission
+  needs HTTPS or localhost. Host audition is audible through the browser's current
+  output, including the PA. The audio layer shares Strudel's AudioContext and clock,
+  and releases its buffers after playback rather than keeping a global sample cache.
+
+Run `bun run verify` before merging. The contribution browser test uses the real
+MediaRecorder with Chromium's simulated microphone. WAV, WebM/Opus, and MP4/AAC
+are decoded by real FFmpeg in unit tests. These checks do not establish physical
+phone capture quality or venue acoustics. Rehearse on physical iOS and Android
+phones before turning on crowd sounds at a public event.

@@ -89,14 +89,21 @@ export class OllamaProvider implements LlmProvider {
 	}
 }
 
-function readScriptFile(path: string, crowd = false): string[] {
+function readScriptFile(
+	path: string,
+	crowd = false,
+	direction = false,
+): string[] {
 	const parsed = JSON.parse(readFileSync(path, 'utf8')) as {
 		responses?: unknown
 		crowdResponses?: unknown
+		directionResponses?: unknown
 	}
-	const responses = crowd
-		? (parsed.crowdResponses ?? parsed.responses)
-		: parsed.responses
+	const responses = direction
+		? (parsed.directionResponses ?? parsed.responses)
+		: crowd
+			? (parsed.crowdResponses ?? parsed.responses)
+			: parsed.responses
 	if (
 		!Array.isArray(responses) ||
 		!responses.every((item) => typeof item === 'string')
@@ -114,6 +121,7 @@ function readScriptFile(path: string, crowd = false): string[] {
 export class MockLlmProvider implements LlmProvider {
 	private readonly responses: string[]
 	private readonly crowdResponses?: string[]
+	private readonly directionResponses?: string[]
 
 	constructor(responses?: string[]) {
 		if (responses !== undefined) {
@@ -126,12 +134,15 @@ export class MockLlmProvider implements LlmProvider {
 		}
 		this.responses = readScriptFile(scriptPath)
 		this.crowdResponses = readScriptFile(scriptPath, true)
+		this.directionResponses = readScriptFile(scriptPath, false, true)
 	}
 
 	async chat(_prompt: string, _opts?: LlmChatOptions): Promise<string> {
-		const queue = _prompt.startsWith('Guide this live ')
-			? (this.crowdResponses ?? this.responses)
-			: this.responses
+		const queue = _opts?.system?.startsWith('Interpret an audience')
+			? (this.directionResponses ?? this.responses)
+			: _prompt.startsWith('Guide this live ')
+				? (this.crowdResponses ?? this.responses)
+				: this.responses
 		const next = queue.shift()
 		if (next === undefined) {
 			throw new Error('MockLlmProvider: scripted responses exhausted')

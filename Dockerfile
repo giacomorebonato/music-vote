@@ -18,6 +18,7 @@ RUN mkdir -p /root/.cache/lightpanda-node \
 	&& chmod +x /root/.cache/lightpanda-node/lightpanda
 
 FROM oven/bun:1.4.2
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /root/.cache/lightpanda-node /root/.cache/lightpanda-node
@@ -32,6 +33,7 @@ COPY --from=build /app/prisma.config.ts ./prisma.config.ts
 ENV NODE_ENV=production
 ENV DATABASE_URL=file:/data/prod.db
 ENV LIGHTPANDA_EXECUTABLE_PATH=/root/.cache/lightpanda-node/lightpanda
+ENV RECORDINGS_DIR=/data/recordings
 ENV PORT=3000
 EXPOSE 3000
 CMD ["sh", "-c", "./node_modules/.bin/prisma migrate deploy && bun run backend/server.ts"]

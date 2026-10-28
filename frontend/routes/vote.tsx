@@ -1,3 +1,5 @@
+import { CrowdContributions } from '@frontend/components/crowd-contributions'
+import type { ReactNode } from 'react'
 import { PollCard } from '@frontend/components/poll-card'
 import { useRoomChannel } from '@frontend/lib/room-ws'
 import { useTRPC } from '@frontend/lib/trpc'
@@ -89,7 +91,7 @@ export function VoteRoute({ roomId }: { roomId: string }) {
 		document.addEventListener('visibilitychange', visible)
 		return () => document.removeEventListener('visibilitychange', visible)
 	}, [reconcile])
-	const onVote = async (pollId: string, choice: string) => {
+	const onVote = async (pollId: string, choice: string | null) => {
 		setError(null)
 		try {
 			await claimController.ensure()
@@ -114,11 +116,18 @@ export function VoteRoute({ roomId }: { roomId: string }) {
 			onVote={(pollId, choice) => {
 				void onVote(pollId, choice)
 			}}
-		/>
+		>
+			<CrowdContributions
+				roomId={roomId}
+				live={crowd.data?.roomStatus === 'live'}
+				ensure={claimController.ensure}
+			/>
+		</VoteView>
 	)
 }
 
 export function VoteView({
+	children,
 	roomStatus,
 	questions,
 	deliveryStatus,
@@ -126,12 +135,13 @@ export function VoteView({
 	error,
 	onVote,
 }: {
+	children?: ReactNode
 	roomStatus: string | null
 	questions: CrowdQuestion[]
 	deliveryStatus: string | null
 	pendingQuestionId: string | null
 	error: string | null
-	onVote: (pollId: string, choice: string) => void
+	onVote: (pollId: string, choice: string | null) => void
 }) {
 	const live = roomStatus === 'live'
 	const deliveryCopy =
@@ -194,6 +204,7 @@ export function VoteView({
 					onVote={(choice) => onVote(question.id, choice)}
 				/>
 			))}
+			{children}
 			{live && deliveryCopy ? (
 				<p
 					className="text-center text-sm opacity-70"

@@ -1,3 +1,9 @@
+import { ContributionMonitor } from '@frontend/components/contribution-monitor'
+import {
+	prepareCrowdSample,
+	playCrowdSample,
+	stopCrowdSample,
+} from '@frontend/audio/crowd-sampler'
 import { AudioReadiness } from '@frontend/components/audio-readiness'
 import { PerformanceStage } from '@frontend/components/performance-stage'
 import type { ApplyResult } from '@frontend/audio/strudel-init'
@@ -208,6 +214,7 @@ function HostConsole({ roomId }: { roomId: string }) {
 						void refetchCrowd()
 					},
 					onError: (error) => {
+						if (event.sample) stopCrowdSample()
 						// The confirmation never reached the server: unblock the
 						// reconcile retry so a later refetch can confirm it.
 						attemptedCandidateRef.current.delete(event.versionId)
@@ -263,8 +270,35 @@ function HostConsole({ roomId }: { roomId: string }) {
 				event.kind === 'undo'
 					? { type: 'reverted', seq }
 					: { type: 'applied', seq }
+			let sampleBuffer: AudioBuffer | undefined
+			let currentSample = event.sample
 			void player
-				.applyPattern(event.code, event.phraseAligned)
+				.applyPattern(
+					event.code,
+					event.phraseAligned,
+					async (finalCheck) => {
+						if (event.kind === 'undo') {
+							stopCrowdSample()
+							return
+						}
+						if (event.kind !== 'evolution') return
+						const authorized = await queryClient.fetchQuery({
+							...trpc.contributions.authorize.queryOptions({
+								roomId,
+								versionId: event.versionId,
+							}),
+							staleTime: 0,
+						})
+						if (authorized.sample && !finalCheck) {
+							currentSample = authorized.sample
+							sampleBuffer = await prepareCrowdSample(authorized.sample)
+						}
+					},
+					async () => {
+						if (currentSample)
+							await playCrowdSample(currentSample, sampleBuffer, true)
+					},
+				)
 				.then((result) => {
 					if (result.ok) {
 						setAudioBlocked(!result.audioRunning)
@@ -293,7 +327,14 @@ function HostConsole({ roomId }: { roomId: string }) {
 					reportApply(event, { ok: false, error: message })
 				})
 		},
-		[claimSeqForFrame, dispatchApplyStatus, reportApply],
+		[
+			claimSeqForFrame,
+			dispatchApplyStatus,
+			reportApply,
+			queryClient,
+			trpc,
+			roomId,
+		],
 	)
 
 	const handleEvent = useCallback(
@@ -388,7 +429,11 @@ function HostConsole({ roomId }: { roomId: string }) {
 					setAudioBlocked(false)
 					const pending = pendingAudioApplyRef.current
 					pendingAudioApplyRef.current = null
-					if (pending) reportApply(pending, { ok: true, audioRunning: true })
+					if (pending?.sample) {
+						attemptedCandidateRef.current.delete(pending.versionId)
+						handleCodeUpdate(pending)
+					} else if (pending)
+						reportApply(pending, { ok: true, audioRunning: true })
 				}
 			})
 		}
@@ -397,7 +442,7 @@ function HostConsole({ roomId }: { roomId: string }) {
 		return () => {
 			for (const type of types) window.removeEventListener(type, unlock)
 		}
-	}, [audioBlocked, reportApply])
+	}, [audioBlocked, reportApply, handleCodeUpdate])
 
 	const { connected } = useRoomChannel(roomId, {
 		onEvent: handleEvent,
@@ -606,7 +651,7 @@ function HostConsole({ roomId }: { roomId: string }) {
 						<div className="flex min-w-48 flex-col gap-1">
 							<span className="eyebrow">audience</span>
 							<p className="text-sm opacity-80">
-								Scan to vote. One vote per phone per poll.
+								Scan to shape the music. Change your answers anytime.
 							</p>
 							<code className="break-all text-xs" data-testid="vote-url">
 								{voteUrl}
@@ -712,6 +757,7 @@ function HostConsole({ roomId }: { roomId: string }) {
 					</div>
 				) : null}
 
+				<ContributionMonitor roomId={roomId} live={room.status === 'live'} />
 				{crowdQuery.data?.questions.map((question) => (
 					<PollMonitor
 						key={question.id}
