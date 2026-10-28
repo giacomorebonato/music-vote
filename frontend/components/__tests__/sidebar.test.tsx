@@ -39,3 +39,14 @@ test('hides the create link for signed-out users', () => {
 	const markup = renderToStaticMarkup(<Sidebar />)
 	expect(markup).not.toContain('Create room')
 })
+
+test('links to the GitHub repository with an icon', () => {
+	sessionHolder.current = { data: null }
+	const markup = renderToStaticMarkup(<Sidebar />)
+	expect(markup).toContain(
+		'href="https://github.com/giacomorebonato/music-vote"',
+	)
+	expect(markup).toContain('target="_blank"')
+	expect(markup).toContain('rel="noopener noreferrer"')
+	expect(markup).toContain('<svg')
+})
