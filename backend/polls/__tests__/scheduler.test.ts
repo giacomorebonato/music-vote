@@ -120,6 +120,7 @@ beforeAll(async () => {
 		generateCrowdEvolution: generate,
 		generateInitialPattern: jest.fn(),
 		generateOutro: jest.fn(async () => 's("bd")'),
+		generateSteeredPattern: jest.fn(),
 	}))
 	mock.module('@backend/llm/provider', () => ({
 		getLlmProvider: () => ({ chat: jest.fn() }),

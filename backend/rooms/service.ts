@@ -5,7 +5,11 @@ import {
 } from '@backend/contributions'
 import { prisma } from '@backend/db/client'
 import { getLlmProvider } from '@backend/llm/provider'
-import { generateInitialPattern, generateOutro } from '@backend/music/engine'
+import {
+	generateInitialPattern,
+	generateOutro,
+	generateSteeredPattern,
+} from '@backend/music/engine'
 import { performancePattern } from '@backend/music/performance'
 import type { StateDoc } from '@backend/music/state-doc'
 import {
@@ -25,6 +29,10 @@ type CreateRoomInput = z.infer<typeof createRoomSchema>
 type EngineDeps = {
 	generateInitialPattern: typeof generateInitialPattern
 	generateOutro: typeof generateOutro
+}
+
+type SteerDeps = {
+	generateSteeredPattern: typeof generateSteeredPattern
 }
 
 const defaultEngine: EngineDeps = {
@@ -117,6 +125,118 @@ export async function perform(
 		phraseAligned: true,
 	})
 	hub.publishHost(roomId, { type: 'crowd_changed' })
+}
+
+export async function steerRoom(
+	roomId: string,
+	hostId: string,
+	text: string,
+	engine: SteerDeps = { generateSteeredPattern },
+): Promise<{ held: boolean }> {
+	const provider = getLlmProvider()
+	// One claim covers claim -> generation -> delivery: a preparing poll row is
+	// the same delivery slot the crowd scheduler and performance layers use.
+	const claimed = await prisma.$transaction(async (tx) => {
+		const room = await tx.room.findUnique({ where: { id: roomId } })
+		if (!room || room.hostId !== hostId) {
+			throw new Error('Room not found or access denied')
+		}
+		if (room.status !== 'live' || !room.currentCode) {
+			throw new Error('Live room not found or access denied')
+		}
+		const pending = await tx.poll.findFirst({
+			where: { roomId, deliveryStatus: 'preparing' },
+		})
+		if (pending) return null
+		const latest = await tx.poll.findFirst({
+			where: { roomId },
+			orderBy: { seq: 'desc' },
+		})
+		const update = await tx.poll.create({
+			data: {
+				roomId,
+				seq: (latest?.seq ?? 0) + 1,
+				kind: 'performance',
+				question: 'steer',
+				options: [],
+				status: 'closed',
+				deliveryStatus: 'preparing',
+				closedAt: new Date(),
+			},
+		})
+		return { updateId: update.id, room }
+	})
+	if (!claimed) throw new Error('Wait for the current musical change to finish')
+
+	const { updateId, room } = claimed
+	const result = await engine.generateSteeredPattern(
+		provider,
+		room.stateDoc as unknown as StateDoc,
+		room.currentCode ?? '',
+		text,
+	)
+
+	// Re-guard the claim like the scheduler's prepareUpdate: end, undo, lock,
+	// timeout or a newer applied version invalidate a preparing steer.
+	const version = await prisma.$transaction(async (tx) => {
+		const fresh = await tx.room.findUnique({ where: { id: roomId } })
+		const update = await tx.poll.findUnique({ where: { id: updateId } })
+		if (
+			fresh?.status !== 'live' ||
+			fresh.currentVersionId !== room.currentVersionId ||
+			update?.deliveryStatus !== 'preparing'
+		)
+			return null
+		if (result === 'hold' || !result) {
+			await tx.poll.update({
+				where: { id: updateId },
+				data: {
+					deliveryStatus: result === 'hold' ? 'unchanged' : 'failed',
+					resolvedAt: new Date(),
+				},
+			})
+			return null
+		}
+		const nextDoc = { ...(room.stateDoc as unknown as StateDoc) }
+		delete nextDoc.moment
+		return tx.patternVersion.create({
+			data: {
+				roomId,
+				code: result.code,
+				source: updateId,
+				baseVersionId: room.currentVersionId,
+				status: 'candidate',
+				stateDoc: nextDoc as unknown as Prisma.InputJsonObject,
+			},
+		})
+	})
+
+	hub.publishHost(roomId, { type: 'crowd_changed' })
+	if (version) {
+		hub.publishHost(roomId, {
+			type: 'code_update',
+			code: version.code,
+			versionId: version.id,
+			kind: 'evolution',
+			phraseAligned: true,
+		})
+		return { held: false }
+	}
+	// The guard released hold/failed itself; a stale or ended room leaves the
+	// claim preparing — release it here without touching played music.
+	const unresolved = await prisma.poll.findUnique({ where: { id: updateId } })
+	if (unresolved?.deliveryStatus === 'preparing') {
+		await prisma.poll.updateMany({
+			where: { id: updateId, deliveryStatus: 'preparing' },
+			data: { deliveryStatus: 'failed', resolvedAt: new Date() },
+		})
+	}
+	if (result === 'hold') return { held: true }
+	throw new Error(
+		result === null
+			? 'The music agent could not steer this direction — adjust it and try again'
+			: 'Steering was overtaken by a newer change — try again',
+	)
 }
 
 export async function createRoom(

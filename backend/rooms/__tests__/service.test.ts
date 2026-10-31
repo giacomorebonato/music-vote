@@ -16,8 +16,10 @@ import {
 	generateOutro,
 	MusicGenError,
 } from '@backend/music/engine'
+import type { StateDoc } from '@backend/music/state-doc'
 import type { Context } from '@backend/trpc/context'
 import type { WsEvent } from '@shared/realtime/events'
+import type { Room } from '../../../prisma/generated/client'
 
 // Own the DB: prisma/rooms-test.db, migrated before connecting. Unique per
 // DB-backed test file so the module-load `migrate deploy` runs cannot collide
@@ -689,4 +691,235 @@ test('performance actions require owner and live room, and commit only on playba
 	const undone = await prisma.room.findUniqueOrThrow({ where: { id: room.id } })
 	expect(undone.currentCode).toBe(original.currentCode)
 	expect(undone.grooveLocked).toBe(true)
+})
+
+// --- steerRoom ---
+
+const STEER_CODE = 's("bd sd cp [hh hh]").gain(0.85)'
+
+function steerEngine(
+	result: { code: string } | 'hold' | null,
+): Parameters<typeof service.steerRoom>[3] {
+	return { generateSteeredPattern: async () => result }
+}
+
+async function makeLiveRoom(): Promise<Room> {
+	const host = await makeHost()
+	const room = await service.createRoom(host.id, baseInput())
+	await service.startRoom(room.id, host.id)
+	return room
+}
+
+test('steerRoom delivers a host direction as a candidate the host can confirm', async () => {
+	const room = await makeLiveRoom()
+	hubSpies.publishHost.mockClear()
+
+	const { held } = await service.steerRoom(
+		room.id,
+		room.hostId,
+		'bring the drums forward',
+		steerEngine({ code: STEER_CODE }),
+	)
+
+	expect(held).toBe(false)
+	const poll = await prisma.poll.findFirstOrThrow({
+		where: { roomId: room.id, kind: 'performance' },
+	})
+	expect(poll.question).toBe('steer')
+	expect(poll.deliveryStatus).toBe('preparing')
+	const version = await prisma.patternVersion.findFirstOrThrow({
+		where: { roomId: room.id, source: poll.id },
+	})
+	expect(version.status).toBe('candidate')
+	expect(version.code).toBe(STEER_CODE)
+	const roomRow = await prisma.room.findUniqueOrThrow({
+		where: { id: room.id },
+	})
+	expect(version.baseVersionId).toBe(roomRow.currentVersionId)
+	expect((version.stateDoc as StateDoc).moment).toBeUndefined()
+	const hostEvents = hubSpies.publishHost.mock.calls as [string, WsEvent][]
+	const update = hostEvents.find(
+		([, event]) => event.type === 'code_update',
+	)?.[1]
+	expect(update).toMatchObject({
+		kind: 'evolution',
+		phraseAligned: true,
+		versionId: version.id,
+	})
+
+	await service.reportApplyResult(room.id, room.hostId, version.id, true)
+	const applied = await prisma.poll.findUniqueOrThrow({
+		where: { id: poll.id },
+	})
+	expect(applied.deliveryStatus).toBe('applied')
+	const fresh = await prisma.room.findUniqueOrThrow({ where: { id: room.id } })
+	expect(fresh.currentCode).toBe(STEER_CODE)
+	expect(fresh.currentVersionId).toBe(version.id)
+})
+
+test('steerRoom waits for the current musical change to finish', async () => {
+	const room = await makeLiveRoom()
+	await prisma.poll.create({
+		data: {
+			roomId: room.id,
+			seq: 99,
+			kind: 'crowd',
+			question: 'Crowd preferences',
+			options: [],
+			status: 'closed',
+			deliveryStatus: 'preparing',
+		},
+	})
+
+	await expect(
+		service.steerRoom(
+			room.id,
+			room.hostId,
+			'bring the drums forward',
+			steerEngine({ code: STEER_CODE }),
+		),
+	).rejects.toThrow('Wait for the current musical change to finish')
+
+	expect(
+		await prisma.poll.count({
+			where: { roomId: room.id, deliveryStatus: 'preparing' },
+		}),
+	).toBe(1)
+})
+
+test('steerRoom hold resolves the claim without a candidate', async () => {
+	const room = await makeLiveRoom()
+
+	const { held } = await service.steerRoom(
+		room.id,
+		room.hostId,
+		'warmer chords',
+		steerEngine('hold'),
+	)
+
+	expect(held).toBe(true)
+	const poll = await prisma.poll.findFirstOrThrow({
+		where: { roomId: room.id, kind: 'performance' },
+	})
+	expect(poll.deliveryStatus).toBe('unchanged')
+	expect(
+		await prisma.patternVersion.count({
+			where: { roomId: room.id, source: poll.id },
+		}),
+	).toBe(0)
+})
+
+test('steerRoom releases the slot and reports failure when generation fails', async () => {
+	const room = await makeLiveRoom()
+
+	await expect(
+		service.steerRoom(room.id, room.hostId, 'bring it down', steerEngine(null)),
+	).rejects.toThrow('could not steer')
+
+	const poll = await prisma.poll.findFirstOrThrow({
+		where: { roomId: room.id, kind: 'performance' },
+	})
+	expect(poll.deliveryStatus).toBe('failed')
+
+	// The slot is free for a corrected retry.
+	await expect(
+		service.steerRoom(
+			room.id,
+			room.hostId,
+			'louder hats',
+			steerEngine({ code: STEER_CODE }),
+		),
+	).resolves.toEqual({ held: false })
+})
+
+test('steerRoom drops a stale claim when the base version moved during generation', async () => {
+	const room = await makeLiveRoom()
+	const staleEngine = {
+		generateSteeredPattern: async () => {
+			// A crowd update lands while the steering note is being generated.
+			const version = await prisma.patternVersion.create({
+				data: {
+					roomId: room.id,
+					source: 'crowd',
+					code: 's("bd sd")',
+					status: 'applied',
+					appliedAt: new Date(),
+				},
+			})
+			await prisma.room.update({
+				where: { id: room.id },
+				data: {
+					currentCode: 's("bd sd")',
+					currentVersionId: version.id,
+				},
+			})
+			return { code: STEER_CODE }
+		},
+	} satisfies Parameters<typeof service.steerRoom>[3]
+
+	await expect(
+		service.steerRoom(room.id, room.hostId, 'later change', staleEngine),
+	).rejects.toThrow('overtaken by a newer change')
+
+	const poll = await prisma.poll.findFirstOrThrow({
+		where: { roomId: room.id, kind: 'performance' },
+	})
+	expect(poll.deliveryStatus).toBe('failed')
+	expect(
+		await prisma.patternVersion.count({
+			where: { roomId: room.id, source: poll.id },
+		}),
+	).toBe(0)
+	expect(
+		(await prisma.room.findUniqueOrThrow({ where: { id: room.id } }))
+			.currentCode,
+	).toBe('s("bd sd")')
+})
+
+test('steerRoom rejects a room that is not live', async () => {
+	const host = await makeHost()
+	const room = await service.createRoom(host.id, baseInput())
+
+	await expect(
+		service.steerRoom(
+			room.id,
+			host.id,
+			'lobby steer',
+			steerEngine({ code: STEER_CODE }),
+		),
+	).rejects.toThrow('Live room not found or access denied')
+})
+
+test('steerRoom rejects a non-owner', async () => {
+	const room = await makeLiveRoom()
+	const other = await makeHost()
+
+	await expect(
+		service.steerRoom(
+			room.id,
+			other.id,
+			'not mine',
+			steerEngine({ code: STEER_CODE }),
+		),
+	).rejects.toThrow('Room not found or access denied')
+})
+
+test('router steer is forbidden for a non-owner', async () => {
+	const room = await makeLiveRoom()
+	const other = await makeHost()
+
+	const caller = roomsRouter.createCaller({
+		prisma,
+		session: { user: { id: other.id } },
+	} as Context)
+
+	let thrown: unknown
+	try {
+		await caller.steer({ roomId: room.id, text: 'bring the drums forward' })
+	} catch (error) {
+		thrown = error
+	}
+
+	expect(thrown).toBeDefined()
+	expect((thrown as { code?: string }).code).toBe('FORBIDDEN')
 })

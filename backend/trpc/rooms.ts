@@ -6,6 +6,7 @@ import {
 	reportApplyResult,
 	skipPoll,
 	startRoom,
+	steerRoom,
 	undoLastChange,
 	perform,
 	setGrooveLock,
@@ -16,6 +17,7 @@ import {
 	createRoomSchema,
 	performanceActionSchema,
 	grooveLockSchema,
+	steerSchema,
 } from '@shared/schemas/room'
 import { initTRPC, TRPCError } from '@trpc/server'
 import { z } from 'zod'
@@ -47,6 +49,19 @@ export const roomsRouter = t.router({
 		.mutation(async ({ ctx, input }) => {
 			await requireRoomOwner(ctx.prisma, input.roomId, ctx.userId)
 			await perform(input.roomId, ctx.userId, input.action)
+		}),
+	steer: protectedProcedure
+		.input(steerSchema)
+		.mutation(async ({ ctx, input }) => {
+			await requireRoomOwner(ctx.prisma, input.roomId, ctx.userId)
+			try {
+				return await steerRoom(input.roomId, ctx.userId, input.text)
+			} catch (error) {
+				throw new TRPCError({
+					code: 'CONFLICT',
+					message: error instanceof Error ? error.message : 'Steering failed',
+				})
+			}
 		}),
 	lock: protectedProcedure
 		.input(grooveLockSchema)
