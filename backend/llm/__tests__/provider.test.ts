@@ -63,9 +63,9 @@ test('mock routes steer prompts to the script file steerResponses', async () => 
 	try {
 		process.env.LLM_MOCK_SCRIPT = path
 		const provider = new MockLlmProvider()
-		expect(
-			await provider.chat('Steer this live techno set: louder hats'),
-		).toBe('steered')
+		expect(await provider.chat('Steer this live techno set: louder hats')).toBe(
+			'steered',
+		)
 		expect(await provider.chat('Write the opening Strudel pattern')).toBe(
 			'base',
 		)
