@@ -17,7 +17,8 @@
 		"db:migrate": "prisma migrate dev && prisma generate",
 		"db:reset": "prisma migrate reset",
 		"postinstall": "prisma generate",
-		"verify": "bun check && bun lint && bun fmt --check && DATABASE_URL=${DATABASE_URL:-file:./dev.db} bun x --no-install knip && bun run test --parallel && PORT=${PLAYWRIGHT_PORT:-3100} CI=1 bun run test:e2e && PORT=${PLAYWRIGHT_PORT:-3100} CI=1 bun run test:e2e:ssr"
+		"verify": "bun check && bun lint && bun fmt --check && DATABASE_URL=${DATABASE_URL:-file:./dev.db} bun x --no-install knip && bun run test --parallel && PORT=${PLAYWRIGHT_PORT:-3100} CI=1 bun run test:e2e && PORT=${PLAYWRIGHT_PORT:-3100} CI=1 bun run test:e2e:ssr",
+		"pm": "bash scripts/premerge.sh"
 	},
 	"devDependencies": {
 		"@playwright/test": "1.62.1",
