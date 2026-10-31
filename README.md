@@ -63,6 +63,13 @@ performance layer. Undo restores the preceding confirmed pattern.
 The lock survives reloads and Undo. **Release groove** lets the next crowd check
 use the latest answers. Manual performance controls work while locked.
 
+**Steer the music** turns one short host note ("the kick is buried — bring the
+drums forward") into a regeneration of the current pattern. It works while the
+set is live, including with the groove locked, and waits when another change is
+preparing. The note applies once and is never stored server-side; a held result
+means the model kept the current groove, and a failed generation leaves the
+note in the box for an adjust-and-retry.
+
 **Performance view** fills the projector with a beat-synchronized visual, live
 crowd preferences and a QR code. Reveal code shows the playing Strudel pattern;
 Escape or Exit performance returns to the console without stopping audio.
