@@ -7,6 +7,7 @@ import {
 	generateInitialPattern,
 	generateNextQuestion,
 	generateOutro,
+	generateSteeredPattern,
 	MusicGenError,
 } from '@backend/music/engine'
 import { initialStateDoc } from '@backend/music/state-doc'
@@ -381,4 +382,70 @@ test('initial generation distinguishes rejected code from a provider failure', a
 	).rejects.toThrow(
 		'Generated pattern was rejected: blocked: disallowed pattern (fetch)',
 	)
+})
+
+// --- generateSteeredPattern ---
+
+test('generateSteeredPattern: happy path returns validated code', async () => {
+	const responses = ['s("bd sd cp [hh hh]").gain(0.85)']
+	const provider = new MockLlmProvider(responses)
+	const result = await generateSteeredPattern(
+		provider,
+		initialStateDoc(params),
+		validCode,
+		'bring the drums forward',
+	)
+
+	expect(result).toEqual({ code: 's("bd sd cp [hh hh]").gain(0.85)' })
+	expect(callsMade(provider, responses)).toBe(1)
+})
+
+test('generateSteeredPattern: HOLD resolves as hold', async () => {
+	const provider = new MockLlmProvider(['HOLD'])
+	const result = await generateSteeredPattern(
+		provider,
+		initialStateDoc(params),
+		validCode,
+		'warmer chords',
+	)
+
+	expect(result).toBe('hold')
+})
+
+test('generateSteeredPattern: code identical to the current pattern resolves as hold', async () => {
+	const provider = new MockLlmProvider([validCode])
+	const result = await generateSteeredPattern(
+		provider,
+		initialStateDoc(params),
+		validCode,
+		'warmer chords',
+	)
+
+	expect(result).toBe('hold')
+})
+
+test('generateSteeredPattern: invalid-then-valid retries once and makes 2 calls', async () => {
+	const responses = [invalidCode, 's("bd sd cp [hh hh]").gain(0.85)']
+	const provider = new MockLlmProvider(responses)
+	const result = await generateSteeredPattern(
+		provider,
+		initialStateDoc(params),
+		validCode,
+		'warmer chords',
+	)
+
+	expect(result).toEqual({ code: 's("bd sd cp [hh hh]").gain(0.85)' })
+	expect(callsMade(provider, responses)).toBe(2)
+})
+
+test('generateSteeredPattern: twice-invalid returns null', async () => {
+	const provider = new MockLlmProvider([invalidCode, invalidCode])
+	const result = await generateSteeredPattern(
+		provider,
+		initialStateDoc(params),
+		validCode,
+		'warmer chords',
+	)
+
+	expect(result).toBeNull()
 })

@@ -7,5 +7,8 @@
 	],
 	"directionResponses": [
 		"{\"kind\": \"preference\", \"targets\": [{\"dimension\": \"bass\", \"choice\": \"bouncy\"}, {\"dimension\": \"space\", \"choice\": \"spacious\"}]}"
+	],
+	"steerResponses": [
+		"s(\"bd sd cp [hh hh]\").gain(0.85)\nnote(\"c2 eb2 g2\").s(\"sawtooth\").lpf(800)"
 	]
 }

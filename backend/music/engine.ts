@@ -4,6 +4,7 @@ import {
 	buildInitialPatternPrompt,
 	buildOutroPrompt,
 	buildQuestionPrompt,
+	buildSteerPrompt,
 } from '@backend/music/prompts'
 import {
 	applyChange,
@@ -199,6 +200,30 @@ export async function generateNextQuestion(
 	}
 
 	return { question: FALLBACK_QUESTION, options: [...FALLBACK_OPTIONS] }
+}
+
+/**
+ * A short host steering note regenerates the current pattern with the note
+ * applied. HOLD (or an unchanged response) means the model kept the groove.
+ */
+export async function generateSteeredPattern(
+	provider: LlmProvider,
+	doc: StateDoc,
+	currentCode: string,
+	steerText: string,
+): Promise<{ code: string } | 'hold' | null> {
+	const prompt = buildSteerPrompt(doc, currentCode, steerText)
+	for (let attempt = 0; attempt < MAX_CODE_ATTEMPTS; attempt++) {
+		try {
+			const raw = await provider.chat(prompt)
+			if (raw.trim() === 'HOLD' || raw.trim() === currentCode.trim())
+				return 'hold'
+			if (compileCheck(raw).ok) return { code: raw }
+		} catch {
+			// A failed or invalid response gets the same bounded retry as other generation.
+		}
+	}
+	return null
 }
 
 /** A crowd snapshot guides the music; no answer is selected as a winner. */

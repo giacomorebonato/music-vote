@@ -52,6 +52,28 @@ function writeScriptFile(responses: string[]): { dir: string; path: string } {
 	return { dir, path }
 }
 
+test('mock routes steer prompts to the script file steerResponses', async () => {
+	const dir = mkdtempSync(join(tmpdir(), 'mv-llm-'))
+	const path = join(dir, 'llm-script.json')
+	writeFileSync(
+		path,
+		JSON.stringify({ responses: ['base'], steerResponses: ['steered'] }),
+	)
+
+	try {
+		process.env.LLM_MOCK_SCRIPT = path
+		const provider = new MockLlmProvider()
+		expect(
+			await provider.chat('Steer this live techno set: louder hats'),
+		).toBe('steered')
+		expect(await provider.chat('Write the opening Strudel pattern')).toBe(
+			'base',
+		)
+	} finally {
+		rmSync(dir, { recursive: true, force: true })
+	}
+})
+
 // --- MockLlmProvider ---
 
 test('mock returns scripted responses in order', async () => {

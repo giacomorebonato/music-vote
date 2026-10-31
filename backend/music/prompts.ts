@@ -158,6 +158,32 @@ export function buildOutroPrompt(doc: StateDoc, currentCode: string): string {
 	].join('\n')
 }
 
+export function buildSteerPrompt(
+	doc: StateDoc,
+	currentCode: string,
+	steerText: string,
+): string {
+	return [
+		`Steer this live ${doc.genre} Strudel pattern (${doc.bpm} BPM) using the DJ's direction.`,
+		'',
+		`The DJ direction (a live note, apply it to the pattern below):`,
+		`"${steerText}"`,
+		'',
+		'Current pattern:',
+		currentCode,
+		'',
+		`Elements present: ${elementsBlock(doc)}`,
+		'',
+		fewShotsBlock(),
+		'',
+		soundsBlock(),
+		'',
+		'Implement the direction as exactly ONE clearly audible, coherent change: keep the same tempo (never change setcps), no all() or each() transforms, keep every other element recognizably intact and the pattern loopable. This direction takes precedence over any crowd preference interpretation.',
+		'If the direction is already true of the current pattern, return exactly HOLD.',
+		CODE_ONLY_RULE,
+	].join('\n')
+}
+
 export function buildCrowdPrompt(
 	doc: StateDoc,
 	snapshot: import('@shared/schemas/preferences').CrowdSnapshot,

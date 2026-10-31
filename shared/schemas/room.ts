@@ -5,6 +5,13 @@ export const performanceActionSchema = z.object({
 	action: z.enum(['build', 'drop', 'strip']),
 })
 
+// A one-shot host steering note: consumed by the next delivered update; the
+// raw text never persists server-side.
+export const steerSchema = z.object({
+	roomId: z.string().min(1),
+	text: z.string().trim().min(3).max(200),
+})
+
 export const grooveLockSchema = z.object({
 	roomId: z.string().min(1),
 	locked: z.boolean(),

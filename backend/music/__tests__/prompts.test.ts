@@ -4,6 +4,7 @@ import {
 	buildInitialPatternPrompt,
 	buildOutroPrompt,
 	buildQuestionPrompt,
+	buildSteerPrompt,
 	FEW_SHOTS,
 	SOUND_HINTS,
 } from '@backend/music/prompts'
@@ -132,6 +133,27 @@ test('question prompt: a question plus two change options, no repeats, paced', (
 	expect(prompt).toContain('techno')
 	expect(prompt).toContain('132')
 })
+
+test('steer prompt carries the direction, current code and code-only rule', () => {
+	const prompt = buildSteerPrompt(
+		initialStateDoc(params),
+		currentCode,
+		'the kick is buried — bring the drums forward',
+	)
+
+	expect(prompt).toContain('techno')
+	expect(prompt).toContain('132')
+	expect(prompt).toContain('the kick is buried — bring the drums forward')
+	expect(prompt).toContain(currentCode)
+	expect(prompt).toContain('AVAILABLE SOUNDS')
+	expect(prompt).toContain('no `oh` sample exists')
+	expect(prompt).toContain('strudel.js code')
+	expect(prompt).toContain('no markdown fences')
+	expect(prompt).toMatch(/exactly ONE.*coherent/s)
+	expect(prompt).toContain('HOLD')
+})
+
+// --- steer prompt ---
 
 test('question prompt renders empty polled dimensions as none yet', () => {
 	const prompt = buildQuestionPrompt(initialStateDoc(params))

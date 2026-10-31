@@ -93,17 +93,21 @@ function readScriptFile(
 	path: string,
 	crowd = false,
 	direction = false,
+	steer = false,
 ): string[] {
 	const parsed = JSON.parse(readFileSync(path, 'utf8')) as {
 		responses?: unknown
 		crowdResponses?: unknown
 		directionResponses?: unknown
+		steerResponses?: unknown
 	}
-	const responses = direction
-		? (parsed.directionResponses ?? parsed.responses)
-		: crowd
-			? (parsed.crowdResponses ?? parsed.responses)
-			: parsed.responses
+	const responses = steer
+		? (parsed.steerResponses ?? parsed.responses)
+		: direction
+			? (parsed.directionResponses ?? parsed.responses)
+			: crowd
+				? (parsed.crowdResponses ?? parsed.responses)
+				: parsed.responses
 	if (
 		!Array.isArray(responses) ||
 		!responses.every((item) => typeof item === 'string')
@@ -122,6 +126,7 @@ export class MockLlmProvider implements LlmProvider {
 	private readonly responses: string[]
 	private readonly crowdResponses?: string[]
 	private readonly directionResponses?: string[]
+	private readonly steerResponses?: string[]
 
 	constructor(responses?: string[]) {
 		if (responses !== undefined) {
@@ -135,14 +140,17 @@ export class MockLlmProvider implements LlmProvider {
 		this.responses = readScriptFile(scriptPath)
 		this.crowdResponses = readScriptFile(scriptPath, true)
 		this.directionResponses = readScriptFile(scriptPath, false, true)
+		this.steerResponses = readScriptFile(scriptPath, false, false, true)
 	}
 
 	async chat(_prompt: string, _opts?: LlmChatOptions): Promise<string> {
 		const queue = _opts?.system?.startsWith('Interpret an audience')
 			? (this.directionResponses ?? this.responses)
-			: _prompt.startsWith('Guide this live ')
-				? (this.crowdResponses ?? this.responses)
-				: this.responses
+			: _prompt.startsWith('Steer this live ')
+				? (this.steerResponses ?? this.responses)
+				: _prompt.startsWith('Guide this live ')
+					? (this.crowdResponses ?? this.responses)
+					: this.responses
 		const next = queue.shift()
 		if (next === undefined) {
 			throw new Error('MockLlmProvider: scripted responses exhausted')

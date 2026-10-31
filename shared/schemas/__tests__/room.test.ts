@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { createRoomSchema } from '../room'
+import { createRoomSchema, steerSchema } from '../room'
 
 const base = {
 	bpm: 120,
@@ -50,6 +50,25 @@ test('pollOpenSec accepts 15s minimum and 600s maximum', () => {
 			pollIntervalSec: 60,
 		}).success,
 	).toBe(true)
+})
+
+test('steerSchema accepts a trimmed host note', () => {
+	const result = steerSchema.safeParse({
+		roomId: 'r1',
+		text: '  bring the drums forward  ',
+	})
+	expect(result.success).toBe(true)
+	if (result.success) expect(result.data.text).toBe('bring the drums forward')
+})
+
+test('steerSchema rejects notes that trim short or exceed 200 chars', () => {
+	expect(steerSchema.safeParse({ roomId: 'r1', text: '  ab  ' }).success).toBe(
+		false,
+	)
+	expect(
+		steerSchema.safeParse({ roomId: 'r1', text: `x${'x'.repeat(200)}` })
+			.success,
+	).toBe(false)
 })
 
 test('pollOpenSec rejects below 15s and above 600s', () => {
