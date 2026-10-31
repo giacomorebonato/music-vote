@@ -96,6 +96,9 @@ function HostConsole({ roomId }: { roomId: string }) {
 		return () => document.removeEventListener('fullscreenchange', changed)
 	}, [])
 	const [toast, setToast] = useState<string | null>(null)
+	// Server-side the note is never persisted: a delivered steer consumes it,
+	// a failing one stays here for an adjust-and-retry (host-steering design).
+	const [steerText, setSteerText] = useState('')
 	// True when the AudioContext is suspended (browser autoplay policy) —
 	// set from `applyPattern` results, cleared by the unlock effect below.
 	const [audioBlocked, setAudioBlocked] = useState(false)
@@ -121,6 +124,7 @@ function HostConsole({ roomId }: { roomId: string }) {
 	const reportApplyResult = useMutation(
 		trpc.rooms.reportApplyResult.mutationOptions(),
 	)
+	const steerMusic = useMutation(trpc.rooms.steer.mutationOptions())
 
 	const refetchRoom = roomQuery.refetch
 
@@ -470,6 +474,7 @@ function HostConsole({ roomId }: { roomId: string }) {
 		startRoom.error ??
 		undoChange.error ??
 		endRoom.error ??
+		steerMusic.error ??
 		reportApplyResult.error
 
 	const mutationOptionsFor = (refetchAfter = true) => ({
@@ -505,6 +510,7 @@ function HostConsole({ roomId }: { roomId: string }) {
 
 	const changing =
 		perform.isPending ||
+		steerMusic.isPending ||
 		lockGroove.isPending ||
 		pendingCandidate !== null ||
 		crowdQuery.data?.deliveryStatus === 'preparing'
@@ -616,6 +622,61 @@ function HostConsole({ roomId }: { roomId: string }) {
 				<div className="flex flex-wrap items-center gap-2">
 					{performanceControls}
 				</div>
+				<section className="card bg-base-100 shadow-xl">
+					<div className="card-body gap-3 p-4">
+						<h2 className="font-bold text-lg">Steer the music</h2>
+						<p className="text-sm opacity-70">
+							Ask the music agent for one change, e.g. “the kick is buried —
+							bring the drums forward”. Works while the groove is locked; waits
+							when another change is preparing. A held note means the model kept
+							the current groove.
+						</p>
+						<div className="flex items-end gap-2">
+							<textarea
+								className="textarea textarea-bordered flex-1"
+								data-testid="steer-input"
+								placeholder="e.g. the kick is buried — bring the drums forward"
+								value={steerText}
+								maxLength={200}
+								rows={2}
+								disabled={room.status !== 'live' || steerMusic.isPending}
+								onChange={(event) => setSteerText(event.target.value)}
+							/>
+							<button
+								type="button"
+								className="btn btn-primary"
+								data-testid="steer-submit"
+								disabled={
+									steerText.trim().length < 3 ||
+									room.status !== 'live' ||
+									changing ||
+									steerMusic.isPending
+								}
+								onClick={() => {
+									steerMusic.mutate(
+										{ roomId, text: steerText.trim() },
+										{
+											onSuccess: (outcome) => {
+												if (outcome.held) {
+													showToast('Held: the model kept the current groove')
+												} else {
+													setSteerText('')
+													showToast('Steering note sent to the music agent')
+												}
+												void refetchRoom()
+											},
+											onError: (error) => {
+												showToast(`Steer failed: ${error.message}`)
+											},
+										},
+									)
+								}}
+							>
+								{steerMusic.isPending ? 'Generating…' : 'Steer'}
+							</button>
+						</div>
+					</div>
+				</section>
 				{room.status === 'ended' ? (
 					<div className="alert" data-testid="room-ended">
 						<span>Set finished — playback stopped.</span>
