@@ -17,6 +17,7 @@ import {
 	type RoleResolver,
 	type SocketData,
 } from '@backend/realtime/hub'
+import { expectOwnsLoopback } from '@backend/server-bind-check'
 import { createPrerenderHandler } from '@backend/ssr/prerender'
 import { createContext } from '@backend/trpc/context'
 import { appRouter } from '@backend/trpc/root'
@@ -85,6 +86,13 @@ async function handleApi(req: Request): Promise<Response> {
 }
 
 const httpServer = Bun.serve<SocketData>({
+	// Bind IPv4 explicitly so the loopback probe below has one well-defined
+	// target and LAN clients (demo phones) reach the server. Bun's default IPv6
+	// wildcard can coexist silently with another process holding 127.0.0.1 on
+	// the same port — SO_REUSEADDR on macOS — which the probe then turns into
+	// a loud refusal instead of browsers intermittently landing on the wrong
+	// app.
+	hostname: '0.0.0.0',
 	port,
 	maxRequestBodySize: 2_200_000,
 	...(isDev
@@ -149,6 +157,15 @@ const httpServer = Bun.serve<SocketData>({
 		},
 	},
 })
+
+// Refuse to run half-bound: exit loudly if a foreign process answers on the
+// loopback port instead of silently sharing it.
+try {
+	await expectOwnsLoopback(port, '/api/trpc/health')
+} catch (error) {
+	console.error(error instanceof Error ? error.message : String(error))
+	process.exit(1)
+}
 
 console.log(`music-vote on http://localhost:${httpServer.port}`)
 
