@@ -30,7 +30,18 @@ Run the gate (`bun run verify`) — or `bun run test --parallel` — for unit te
 
 ## Env vars
 
-`.env.example` is the source of truth. Highlights:
+`.env.example` is the source of truth. A fresh worktree or clone ships neither
+`.env` nor `prisma/dev.db` — both are gitignored — so `bun run dev` and the
+Prisma-backed parts of `bun run verify` fail until they exist. Create them
+first:
+
+```sh
+cp .env.example .env # then set BETTER_AUTH_SECRET and OLLAMA_MODEL (+ OLLAMA_TIMEOUT_MS for slow cloud models)
+bun run db:migrate # creates prisma/dev.db
+```
+
+If the main checkout already has a working `.env`, copying it over instead is
+fine. Highlights:
 
 - `DATABASE_URL` — `file:./dev.db` (dev), `file:./test.db` (E2E test DB), `file:/data/prod.db` (prod); unit tests override it per file (see [Test databases](#test-databases))
 - `BETTER_AUTH_SECRET` — random, e.g. `openssl rand -base64 32`

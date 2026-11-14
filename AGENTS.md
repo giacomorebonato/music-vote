@@ -4,6 +4,8 @@ music-vote: crowd-voted AI live music on Bun — React 19 SPA (TanStack Router/Q
 
 **Bun everywhere** — runtime, package manager, bundler, test runner. Never npm/pnpm/yarn.
 
+**New worktree/clone**: `.env` and `prisma/dev.db` are gitignored and absent — copy/create them before `bun run dev`/`verify` (rule in [commands.md](docs/agents/commands.md#env-vars)).
+
 - `bun run bootstrap` — fresh-clone setup (idempotent)
 - `bun run dev` — dev server with HMR
 - `bun run build` — production bundle (React Compiler on)
