@@ -179,8 +179,21 @@ export function getLlmProvider(): LlmProvider {
 		}
 		// Cloud models can take well over 25s per generation; a deploy running one
 		// raises the per-request deadline instead of watching evolutions and the
-		// outro time out. Unset, empty, or non-positive values keep the 25s default.
-		const timeoutRaw = Number(process.env.OLLAMA_TIMEOUT_MS)
+		// outro time out. Unset or empty keeps the 25s default; a set-but-invalid
+		// value also falls back, but warns — a demo host with a typo would
+		// otherwise silently get the 25s default back.
+		const rawTimeout = process.env.OLLAMA_TIMEOUT_MS
+		const timeoutRaw = Number(rawTimeout)
+		const timeoutValid =
+			rawTimeout !== undefined &&
+			rawTimeout !== '' &&
+			Number.isFinite(timeoutRaw) &&
+			timeoutRaw > 0
+		if (rawTimeout !== undefined && rawTimeout !== '' && !timeoutValid) {
+			console.warn(
+				`OLLAMA_TIMEOUT_MS=${JSON.stringify(rawTimeout)} is not a positive number; using the 25s default.`,
+			)
+		}
 		return new OllamaProvider({
 			baseUrl: process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434',
 			model,
@@ -191,8 +204,7 @@ export function getLlmProvider(): LlmProvider {
 					: think === 'false'
 						? false
 						: think || undefined,
-			timeoutMs:
-				Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? timeoutRaw : undefined,
+			timeoutMs: timeoutValid ? timeoutRaw : undefined,
 		})
 	}
 	throw new Error(`Unknown LLM_PROVIDER: ${kind}`)

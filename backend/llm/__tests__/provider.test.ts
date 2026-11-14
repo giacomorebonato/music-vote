@@ -280,6 +280,7 @@ for (const [setting, expectedDeadline] of [
 	['-5', 25_000],
 ] as const) {
 	test(`factory reads OLLAMA_TIMEOUT_MS=${JSON.stringify(setting)} as a ${expectedDeadline / 1000}s deadline`, async () => {
+		const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
 		const timeout = new DOMException('The operation timed out.', 'TimeoutError')
 		const signal = AbortSignal.abort(timeout)
 		const timeoutSpy = spyOn(AbortSignal, 'timeout').mockReturnValue(signal)
@@ -294,8 +295,19 @@ for (const [setting, expectedDeadline] of [
 				`Ollama model test-model timed out after ${expectedDeadline / 1000} seconds`,
 			)
 			expect(timeoutSpy).toHaveBeenCalledWith(expectedDeadline)
+			// A set-but-invalid value must warn: a demo host with a typo would
+			// otherwise silently get the 25s default back and watch the outro
+			// time out again.
+			const invalid =
+				setting !== '' &&
+				!(Number.isFinite(Number(setting)) && Number(setting) > 0)
+			expect(warnSpy).toHaveBeenCalledTimes(invalid ? 1 : 0)
+			if (invalid) {
+				expect(warnSpy.mock.calls[0]?.[0]).toContain('OLLAMA_TIMEOUT_MS')
+			}
 		} finally {
 			timeoutSpy.mockRestore()
+			warnSpy.mockRestore()
 		}
 	})
 }

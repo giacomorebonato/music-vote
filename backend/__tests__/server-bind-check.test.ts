@@ -1,15 +1,13 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test'
-import { expectOwnsLoopback } from '@backend/server-bind-check'
+import { afterEach, expect, test } from 'bun:test'
+import {
+	expectIpv6LoopbackRefused,
+	expectOwnsLoopback,
+} from '@backend/server-bind-check'
 
 const originalFetch = globalThis.fetch
 
-beforeEach(() => {
-	delete process.env.PORT
-})
-
 afterEach(() => {
 	globalThis.fetch = originalFetch
-	delete process.env.PORT
 })
 
 test('resolves when the loopback probe answers as this server (tRPC JSON)', async () => {
@@ -72,4 +70,36 @@ test('rethrows probe transport failures with the loopback target named', async (
 	await expect(expectOwnsLoopback(3000, '/api/trpc')).rejects.toThrow(
 		/127\.0\.0\.1:3000.*ECONNREFUSED/s,
 	)
+})
+
+test('IPv6 loopback probe passes when nothing answers (we hold no IPv6 socket)', async () => {
+	globalThis.fetch = (async () => {
+		throw new Error('ECONNREFUSED')
+	}) as unknown as typeof fetch
+
+	await expect(
+		expectIpv6LoopbackRefused(3000, '/api/trpc/boot-probe'),
+	).resolves.toBeUndefined()
+})
+
+test('IPv6 loopback probe throws a conflict error when any process answers on [::1]', async () => {
+	globalThis.fetch = (async () =>
+		new Response('<html>squatter</html>', {
+			status: 200,
+			headers: { 'content-type': 'text/html' },
+		})) as unknown as typeof fetch
+
+	await expect(
+		expectIpv6LoopbackRefused(3000, '/api/trpc/boot-probe'),
+	).rejects.toThrow(/another process is answering on \[::1\]/)
+})
+
+test('IPv6 loopback probe refuses when the connection is accepted but never answers', async () => {
+	globalThis.fetch = (async () => {
+		throw new Error('The operation timed out.')
+	}) as unknown as typeof fetch
+
+	await expect(
+		expectIpv6LoopbackRefused(3000, '/api/trpc/boot-probe'),
+	).rejects.toThrow(/expected \[::1\] to be free/)
 })

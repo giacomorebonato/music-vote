@@ -50,6 +50,11 @@ Real musicality needs a real provider: point `OLLAMA_BASE_URL` at a local Ollama
 `OLLAMA_API_KEY`. Nothing in CI tests that — the model choice is not
 automatable, so it stays a manual check.
 
+At boot the server refuses to run if another process answers on the loopback
+port (`Port NNNN conflict: another process is answering …`). Stop the other
+process or set `PORT` — Bun's bind can otherwise coexist silently with it and
+browsers hit the wrong app.
+
 ## Deploy (Fly.io)
 
 App `music-vote`, volume `music_vote_data` mounted at `/data` (see `fly.toml`).
@@ -89,7 +94,9 @@ become booleans, and other values are model-specific thinking levels. Check a
 new model's supported levels before switching it. An existing Fly secret with
 the same name overrides `fly.toml`.
 
-Keep each Ollama request bounded to 25 seconds. Generation retries once and
+Keep each Ollama request bounded by `OLLAMA_TIMEOUT_MS` (default 25 seconds;
+slow cloud models raise it — the local glm-5.2:cloud demo needed 120000 for a
+clean outro). Generation retries once and
 logs whether each attempt failed at the provider or during pattern validation;
 opening/outro errors retain the last failure in the host-visible message and
 Error cause. Logs omit prompts, generated code, and API keys.
