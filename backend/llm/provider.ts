@@ -11,6 +11,8 @@ export type OllamaConfig = {
 	model: string
 	apiKey?: string
 	think?: boolean | string
+	/** Per-request deadline in ms. Defaults to 25s; see OLLAMA_TIMEOUT_MS. */
+	timeoutMs?: number
 }
 
 // Ollama returns the assistant reply as { message: { content } }. LLMs often
@@ -25,16 +27,19 @@ function stripCodeFences(content: string): string {
 }
 
 export class OllamaProvider implements LlmProvider {
+	private static readonly DEFAULT_TIMEOUT_MS = 25_000
 	private readonly baseUrl: string
 	private readonly model: string
 	private readonly apiKey: string | undefined
 	private readonly think: boolean | string | undefined
+	private readonly timeoutMs: number
 
-	constructor({ baseUrl, model, apiKey, think }: OllamaConfig) {
+	constructor({ baseUrl, model, apiKey, think, timeoutMs }: OllamaConfig) {
 		this.baseUrl = baseUrl.replace(/\/$/, '')
 		this.model = model
 		this.apiKey = apiKey
 		this.think = think
+		this.timeoutMs = timeoutMs ?? OllamaProvider.DEFAULT_TIMEOUT_MS
 	}
 
 	async chat(prompt: string, opts?: LlmChatOptions): Promise<string> {
@@ -57,7 +62,7 @@ export class OllamaProvider implements LlmProvider {
 		}
 		if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`
 
-		const signal = AbortSignal.timeout(25_000)
+		const signal = AbortSignal.timeout(this.timeoutMs)
 		try {
 			const response = await fetch(`${this.baseUrl}/api/chat`, {
 				method: 'POST',
@@ -80,7 +85,7 @@ export class OllamaProvider implements LlmProvider {
 		} catch (cause) {
 			if (signal.aborted) {
 				throw new Error(
-					`Ollama model ${this.model} timed out after 25 seconds`,
+					`Ollama model ${this.model} timed out after ${this.timeoutMs / 1000} seconds`,
 					{ cause },
 				)
 			}
@@ -172,6 +177,10 @@ export function getLlmProvider(): LlmProvider {
 		if (!model) {
 			throw new Error('OLLAMA_MODEL is required for LLM_PROVIDER=ollama')
 		}
+		// Cloud models can take well over 25s per generation; a deploy running one
+		// raises the per-request deadline instead of watching evolutions and the
+		// outro time out. Unset, empty, or non-positive values keep the 25s default.
+		const timeoutRaw = Number(process.env.OLLAMA_TIMEOUT_MS)
 		return new OllamaProvider({
 			baseUrl: process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434',
 			model,
@@ -182,6 +191,8 @@ export function getLlmProvider(): LlmProvider {
 					: think === 'false'
 						? false
 						: think || undefined,
+			timeoutMs:
+				Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? timeoutRaw : undefined,
 		})
 	}
 	throw new Error(`Unknown LLM_PROVIDER: ${kind}`)

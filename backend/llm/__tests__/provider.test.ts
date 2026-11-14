@@ -15,6 +15,7 @@ const LLM_ENV_KEYS = [
 	'OLLAMA_MODEL',
 	'OLLAMA_THINK',
 	'OLLAMA_API_KEY',
+	'OLLAMA_TIMEOUT_MS',
 ] as const
 
 const originalFetch = globalThis.fetch
@@ -269,6 +270,35 @@ test('ollama preserves HTTP failures for generation diagnostics', async () => {
 	})
 	await expect(provider.chat('hi')).rejects.toThrow('Ollama chat failed: 401')
 })
+
+for (const [setting, expectedDeadline] of [
+	['60000', 60_000],
+	['  90000  ', 90_000],
+	['', 25_000],
+	['garbage', 25_000],
+	['0', 25_000],
+	['-5', 25_000],
+] as const) {
+	test(`factory reads OLLAMA_TIMEOUT_MS=${JSON.stringify(setting)} as a ${expectedDeadline / 1000}s deadline`, async () => {
+		const timeout = new DOMException('The operation timed out.', 'TimeoutError')
+		const signal = AbortSignal.abort(timeout)
+		const timeoutSpy = spyOn(AbortSignal, 'timeout').mockReturnValue(signal)
+		globalThis.fetch = (async () => {
+			throw timeout
+		}) as unknown as typeof fetch
+		try {
+			process.env.OLLAMA_MODEL = 'test-model'
+			process.env.OLLAMA_TIMEOUT_MS = setting
+			const provider = getLlmProvider()
+			await expect(provider.chat('hi')).rejects.toThrow(
+				`Ollama model test-model timed out after ${expectedDeadline / 1000} seconds`,
+			)
+			expect(timeoutSpy).toHaveBeenCalledWith(expectedDeadline)
+		} finally {
+			timeoutSpy.mockRestore()
+		}
+	})
+}
 
 for (const phase of ['request', 'body'] as const) {
 	test(`ollama reports a timeout during ${phase} with the model and deadline`, async () => {
