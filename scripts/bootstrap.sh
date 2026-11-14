@@ -10,6 +10,12 @@ cd "$(dirname "$0")/.."
 
 step() { printf '\n\033[1m→ %s\033[0m\n' "$*"; }
 
+step 'env file (.env is gitignored; create from .env.example if absent)'
+if [ ! -f .env ]; then
+	cp .env.example .env
+	printf '\033[33mCreated .env from .env.example — set BETTER_AUTH_SECRET and OLLAMA_MODEL before hosting a real set.\033[0m\n' >&2
+fi
+
 step 'bun install'
 bun install
 
