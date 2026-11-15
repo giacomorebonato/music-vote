@@ -24,6 +24,7 @@ import {
 import { createPrerenderHandler } from '@backend/ssr/prerender'
 import { createContext } from '@backend/trpc/context'
 import { appRouter } from '@backend/trpc/root'
+import { resolveDevelopmentMode } from '@backend/development-mode'
 import { PUBLIC_SSR_PATHS } from '@shared/ssr-paths'
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch'
 
@@ -116,7 +117,7 @@ const httpServer = Bun.serve<SocketData>({
 					'/ws': handleWs,
 					'/*': devIndex as unknown as import('bun').HTMLBundle,
 				},
-				development: { hmr: true, console: true },
+				development: resolveDevelopmentMode(),
 			}
 		: {
 				development: false,
