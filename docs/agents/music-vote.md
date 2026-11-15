@@ -55,6 +55,34 @@ port (`Port NNNN conflict: another process is answering …`). Stop the other
 process or set `PORT` — Bun's bind can otherwise coexist silently with it and
 browsers hit the wrong app.
 
+## Sharing a dev branch over the tailnet
+
+`bun run dev:net` runs the same dev server through portless with Tailscale
+sharing, so phones and teammates on the tailnet can reach the branch under
+test without a port number:
+
+```sh
+bun run dev:net
+# -> <branch>.music-vote.localhost          (this machine)
+# -> https://<node>.<tailnet>.ts.net        (tailnet; 8443, 8444, … per extra app)
+```
+
+Prerequisites (machine, one-time): `portless` ≥ 0.17 (also a devDependency),
+`portless trust` if the proxy runs HTTPS, `tailscale up`, and HTTPS
+certificates enabled on the tailnet (`tailscale serve` provisions the LE
+cert on first request). Auth needs no configuration under `dev:net`: the
+server resolves its `baseURL` from `PORTLESS_TAILSCALE_URL`, then
+`PORTLESS_URL`, and trusts the `.localhost` origin (`backend/auth/base-url.ts`).
+
+Frontend HMR is off under `dev:net`: Bun 1.4's dev server rejects any `Host`
+that is not `localhost`, `*.localhost` or an IP literal (DNS-rebinding guard,
+no `allowedHosts` option yet — oven-sh/bun#47359), so the SPA is served
+bundled to tailnet clients. Use plain `bun run dev` while editing.
+
+Verify a shared session the same way as a deploy: open a host page on the
+shared URL and watch the `/ws` connection hold across at least one poll
+interval; then open the same URL on a phone on the tailnet and cast a vote.
+
 ## Deploy (Fly.io)
 
 App `music-vote`, volume `music_vote_data` mounted at `/data` (see `fly.toml`).

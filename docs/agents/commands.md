@@ -9,6 +9,7 @@
 - `bun fmt` — format files using `[fmt]` in `bunfig.toml`. `--check` verifies without writing. `--staged` selects staged files; without `--check` it writes and re-stages them, refusing partially staged files.
 - `bun run verify` — native type/lint/format checks, knip, isolated unit tests, then both Playwright suites (development and production SSR) on a fresh server at port 3100 (`PLAYWRIGHT_PORT` overrides it). This is the complete merge/CI gate.
 - `bun run dev` — dev server with HMR (`bun --hot backend/server.ts`).
+- `bun run dev:net` — dev server shared over the tailnet through portless (`portless run --tailscale`): branch-prefixed `<branch>.music-vote.localhost` URL plus a root-mounted `https://<node>.<tailnet>.ts.net` (443, then 8443, 8444, … per concurrent app). The server's auth `baseURL` follows the portless child env; frontend HMR is off under `dev:net` because Bun 1.4's dev server blocks non-`localhost` `Host` headers (no `allowedHosts` yet) — use plain `dev` for HMR. See [music-vote.md](music-vote.md) for prerequisites and the phone-side check.
 - `bun run build` — production bundle via `scripts/build.ts`, React Compiler enabled; see [react-compiler.md](react-compiler.md).
 - `bun run start` — production server.
 - `bun run test` — unit tests (`bun test backend shared frontend`); pass `--parallel` for isolation.
@@ -46,7 +47,8 @@ it over instead is fine. Highlights:
 
 - `DATABASE_URL` — `file:./dev.db` (dev), `file:./test.db` (E2E test DB), `file:/data/prod.db` (prod); unit tests override it per file (see [Test databases](#test-databases))
 - `BETTER_AUTH_SECRET` — random, e.g. `openssl rand -base64 32`
-- `BETTER_AUTH_URL` — e.g. `http://localhost:3000` (dev) / `https://music-vote.fly.dev` (prod)
+- `BETTER_AUTH_URL` — e.g. `http://localhost:3000` (dev) / `https://music-vote.fly.dev` (prod); under `dev:net` the portless URLs take precedence (next bullet)
+- `PORTLESS_TAILSCALE_URL` / `PORTLESS_URL` — set on the server by `bun run dev:net` (portless child env, never `.env`); auth `baseURL` resolves `PORTLESS_TAILSCALE_URL` → `PORTLESS_URL` → `BETTER_AUTH_URL` → `http://localhost:3000`, with empty strings counted as unset (`backend/auth/base-url.ts`)
 - `LLM_PROVIDER` / `OLLAMA_BASE_URL` / `OLLAMA_MODEL` / `OLLAMA_API_KEY` / `OLLAMA_THINK` / `LLM_MOCK_SCRIPT` — LLM provider config; prod deploy + ops notes in [music-vote.md](music-vote.md)
 - SSR prerender (optional, prod-only): `SSR_CACHE_DIR`, `LIGHTPANDA_EXECUTABLE_PATH` — see [bot-ssr.md](bot-ssr.md)
 

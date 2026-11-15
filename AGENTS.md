@@ -8,6 +8,7 @@ music-vote: crowd-voted AI live music on Bun — React 19 SPA (TanStack Router/Q
 
 - `bun run bootstrap` — fresh-clone setup (idempotent)
 - `bun run dev` — dev server with HMR
+- `bun run dev:net` — share the dev branch over the tailnet via portless: branch-prefixed `<branch>.music-vote.localhost` plus `https://<node>.<tailnet>.ts.net`; auth URL auto-derived, frontend HMR off (Bun dev-server Host guard)
 - `bun run build` — production bundle (React Compiler on)
 - `bun check`, `bun lint`, `bun fmt` — native Bun type checker, linter, and formatter (no package script overrides)
 - `bun run verify` — native checks + knip + all unit and Playwright tests; run before claiming work done
