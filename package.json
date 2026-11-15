@@ -7,6 +7,7 @@
 	},
 	"scripts": {
 		"dev": "bun --hot backend/server.ts",
+		"dev:net": "portless run --tailscale",
 		"build": "bun run scripts/build.ts",
 		"start": "NODE_ENV=production bun backend/server.ts",
 		"test": "bun test backend shared frontend",
@@ -33,6 +34,7 @@
 		"bun-plugin-tailwind": "^0.1.2",
 		"daisyui": "5.7.20",
 		"knip": "^6.32.3",
+		"portless": "^0.17.0",
 		"prisma": "7",
 		"tailwindcss": "4.3.3",
 		"typescript": "7.0.2"
