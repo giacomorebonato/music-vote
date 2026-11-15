@@ -30,3 +30,4 @@ prisma/generated/
 
 .recordings/
 prisma/contributions-test.db
+dogfood-output/
