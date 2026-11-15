@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test'
-import { resolveAuthBaseURL, resolveAuthTrustedOrigins } from '../base-url'
+import {
+	resolveAuthBaseURL,
+	resolveAuthTrustedOrigins,
+	resolveUseSecureCookies,
+} from '../base-url'
 
 describe('resolveAuthBaseURL', () => {
 	test('prefers the portless tailscale URL when all are set', () => {
@@ -64,5 +68,46 @@ describe('resolveAuthTrustedOrigins', () => {
 
 	test('ignores an empty portless URL', () => {
 		expect(resolveAuthTrustedOrigins({ PORTLESS_URL: '' })).toEqual([])
+	})
+})
+
+describe('resolveUseSecureCookies', () => {
+	test('disables secure cookies when the portless local URL is plain http', () => {
+		expect(
+			resolveUseSecureCookies({
+				PORTLESS_TAILSCALE_URL: 'https://node.tailnet.ts.net',
+				PORTLESS_URL: 'http://branch.music-vote.localhost',
+			}),
+		).toBe(false)
+	})
+
+	test('keeps the default when the portless local URL is https', () => {
+		expect(
+			resolveUseSecureCookies({
+				PORTLESS_TAILSCALE_URL: 'https://node.tailnet.ts.net',
+				PORTLESS_URL: 'https://branch.music-vote.localhost',
+			}),
+		).toBeUndefined()
+	})
+
+	test('disables secure cookies under plain http portless too', () => {
+		expect(
+			resolveUseSecureCookies({
+				PORTLESS_URL: 'http://branch.music-vote.localhost',
+			}),
+		).toBe(false)
+	})
+
+	test('keeps the default without portless env', () => {
+		expect(resolveUseSecureCookies({})).toBeUndefined()
+	})
+
+	test('treats an empty portless URL as unset', () => {
+		expect(
+			resolveUseSecureCookies({
+				PORTLESS_TAILSCALE_URL: 'https://node.tailnet.ts.net',
+				PORTLESS_URL: '',
+			}),
+		).toBeUndefined()
 	})
 })

@@ -175,6 +175,10 @@ try {
 }
 
 console.log(`music-vote on http://localhost:${httpServer.port}`)
+if (process.env.PORTLESS_TAILSCALE_URL)
+	console.log(`shared on tailnet: ${process.env.PORTLESS_TAILSCALE_URL}`)
+if (process.env.PORTLESS_URL)
+	console.log(`shared locally: ${process.env.PORTLESS_URL}`)
 
 // Re-arm timers for rooms that were mid-set when the process stopped. Failures
 // are logged and non-fatal (see backend/boot.ts).

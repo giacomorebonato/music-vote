@@ -35,3 +35,20 @@ export function resolveAuthTrustedOrigins(
 	const portlessUrl = firstNonEmpty(env.PORTLESS_URL)
 	return portlessUrl ? [portlessUrl] : []
 }
+
+/**
+ * Better-auth prefixes its cookies with `__Secure-` (and marks them Secure)
+ * whenever the resolved baseURL is https. Under `dev:net` the baseURL is the
+ * ts.net URL, but the portless proxy may serve the branch-prefixed
+ * `.localhost` origin over plain http (its persisted transport mode) — and
+ * browsers reject `__Secure-` cookies over http, silently dropping the host
+ * session. When the local portless origin is plain http, cookies cannot be
+ * secure anyway, so turn the prefix off; otherwise keep better-auth's
+ * default. Dev-only and tailnet-scoped: without portless env nothing changes.
+ */
+export function resolveUseSecureCookies(
+	env: NodeJS.ProcessEnv = process.env,
+): boolean | undefined {
+	const portlessUrl = firstNonEmpty(env.PORTLESS_URL)
+	return portlessUrl?.startsWith('http://') ? false : undefined
+}
