@@ -2,7 +2,7 @@
 # Local quick-merge: run the shared check gate, and if green, fast-forward
 # merge the current branch into main and push it. Returns you to your branch.
 #
-#   bun run premerge
+#   bun run merge
 #
 # Requires a clean working tree and `origin/main` to not have diverged.
 set -euo pipefail

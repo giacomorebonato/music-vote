@@ -126,7 +126,7 @@ path.
 - `bun lint` — native lint checks; use `--fix` to apply fixes.
 - `bun fmt` — native formatting; use `--check` to verify without writing.
 - `bun run verify` — native checks + knip + all unit tests and both Playwright suites.
-- `bun run premerge` — `verify`, then fast-forward merge → main and push.
+- `bun run merge` — `verify`, then fast-forward merge → main and push.
 
 Git hooks (`.githooks/`, wired by `bootstrap`) require native checks at commit
 and unit tests at push; merges and pushes to main require the complete `verify` gate.

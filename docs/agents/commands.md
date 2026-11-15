@@ -16,7 +16,7 @@
 - `bun run test:e2e:ssr` — production SSR Playwright suite.
 - `bun x --no-install knip` — unused dependencies, files, and exports. Set `DATABASE_URL=file:./dev.db` when no `.env` exists so Knip can load the Prisma config.
 - `bun run bootstrap` — dependencies, APM skills/MCP, Prisma client, development DB migration, and Git hook installation.
-- `bun run premerge` — `verify`, then fast-forward current branch → main and push.
+- `bun run merge` — `verify`, then fast-forward current branch → main and push.
 - `bun run db:migrate` — Prisma development migration and client generation.
 - `bun run db:reset` — Prisma migration reset.
 
@@ -44,7 +44,7 @@ Run the gate (`bun run verify`) — or `bun run test --parallel` — for unit te
 
 `.githooks/pre-commit` runs native `bun check`, `bun lint --staged`, and `bun fmt --check --staged`. Type checking covers the project; lint and formatting use Bun's native staged-file selection. Hooks do not apply fixes or stage files. There is no custom index snapshot or hidden wrapper.
 
-`.githooks/pre-push` runs native checks, knip, and unit tests; pushes to main run `bun run verify` and require a clean tree at the commit being pushed. `.githooks/pre-merge-commit` runs `verify` for merge commits on main, including manually completed merges via pre-commit. Git has no merge hook for fast-forwards: use `bun run premerge` for a tested fast-forward. CI runs `verify` for main and its pull requests; require its `check` job in branch protection to prevent remote bypasses. `bun run bootstrap` sets `core.hooksPath = .githooks`.
+`.githooks/pre-push` runs native checks, knip, and unit tests; pushes to main run `bun run verify` and require a clean tree at the commit being pushed. `.githooks/pre-merge-commit` runs `verify` for merge commits on main, including manually completed merges via pre-commit. Git has no merge hook for fast-forwards: use `bun run merge` for a tested fast-forward. CI runs `verify` for main and its pull requests; require its `check` job in branch protection to prevent remote bypasses. `bun run bootstrap` sets `core.hooksPath = .githooks`.
 
 ## Knip
 

@@ -13,7 +13,7 @@
 		"test:e2e": "playwright test",
 		"test:e2e:ssr": "playwright test --config=playwright.ssr.config.ts",
 		"bootstrap": "bash scripts/bootstrap.sh",
-		"premerge": "bash scripts/premerge.sh",
+		"merge": "bash scripts/merge.sh",
 		"db:migrate": "prisma migrate dev && prisma generate",
 		"db:reset": "prisma migrate reset",
 		"postinstall": "prisma generate",
