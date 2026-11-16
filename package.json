@@ -7,7 +7,7 @@
 	},
 	"scripts": {
 		"dev": "bun --hot backend/server.ts",
-		"dev:net": "portless run --tailscale",
+		"dev:net": "bash scripts/dev-net.sh",
 		"build": "bun run scripts/build.ts",
 		"start": "NODE_ENV=production bun backend/server.ts",
 		"test": "bun test backend shared frontend",
