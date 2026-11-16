@@ -51,7 +51,7 @@ Real musicality needs a real provider: point `OLLAMA_BASE_URL` at a local Ollama
 automatable, so it stays a manual check.
 
 At boot the server probes both loopback families and refuses to run on a
-conflict (`Port NNNN conflict`): a foreign process answering on `127.0.0.1`,
+conflict (`Port NNNN conflict` prefix): a foreign process answering on `127.0.0.1`,
 or answering or accepting-without-answering on `[::1]`. Stop the other
 process or set `PORT` — Bun's bind can otherwise coexist silently with a
 `127.0.0.1` squatter and browsers hit the wrong app.
@@ -176,7 +176,7 @@ production probe, MiniMax's default thinking timed out at both 25 and 90 seconds
   failures in version- and platform-drifting text (1.4.2 on Linux emits no
   errno token, 1.4.4+/canary prefix one), so never match on errno strings —
   every other connect failure resolves as free. Triage a down machine from
-  its machine events: `exit_code 1` + restart_count climbing = boot-time
+  its machine events: `exit_code 1` + `restart_count` climbing = boot-time
   refusal; the error line is in the machine's console via `flyctl logs`.
 - **Deploy freshness.** `NODE_ENV=production` is set in the Dockerfile; without
   it the SPA shell is served unbundled from the dev server path. The build must

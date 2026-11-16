@@ -87,10 +87,10 @@ export async function expectIpv6LoopbackRefused(
 		const message = cause instanceof Error ? cause.message : String(cause)
 		if (
 			(cause instanceof Error && cause.name === 'TimeoutError') ||
-			/timed out|operation timed out/i.test(message)
+			/timed out/i.test(message)
 		) {
 			throw new Error(
-				`another process accepted the connection on [::1]:${port} without answering (probe ${probePath} timed out). Stop it or set PORT.`,
+				`Port ${port} conflict: another process accepted the connection on [::1]:${port} without answering (probe ${probePath} timed out). Stop it or set PORT.`,
 				{ cause },
 			)
 		}

@@ -129,3 +129,18 @@ test('IPv6 loopback probe still conflicts on TimeoutError name from AbortSignal.
 		expectIpv6LoopbackRefused(3000, '/api/trpc/boot-probe'),
 	).rejects.toThrow(/accepted the connection .* without answering/)
 })
+
+test('IPv6 loopback probe conflicts on TimeoutError name alone, message without "timed out"', async () => {
+	// Real runtime: AbortSignal.timeout rejects with a DOMException whose
+	// message need not contain "timed out", so the name branch must be pinned
+	// on its own.
+	globalThis.fetch = (async () => {
+		const e = new Error('Aborted')
+		e.name = 'TimeoutError'
+		throw e
+	}) as unknown as typeof fetch
+
+	await expect(
+		expectIpv6LoopbackRefused(3000, '/api/trpc/boot-probe'),
+	).rejects.toThrow(/Port 3000 conflict/)
+})
