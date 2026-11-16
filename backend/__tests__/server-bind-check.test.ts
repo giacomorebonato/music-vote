@@ -101,5 +101,31 @@ test('IPv6 loopback probe refuses when the connection is accepted but never answ
 
 	await expect(
 		expectIpv6LoopbackRefused(3000, '/api/trpc/boot-probe'),
-	).rejects.toThrow(/expected \[::1\] to be free/)
+	).rejects.toThrow(/accepted the connection .* without answering/)
+})
+
+test('IPv6 loopback probe passes when Bun wraps the refusal without an errno', async () => {
+	// Bun 1.4.2 on Linux wraps a refused connect as a bare TypeError with no
+	// ECONNREFUSED token — seen live on the Fly machine (prod crash loop).
+	globalThis.fetch = (async () => {
+		throw new TypeError(
+			'Unable to connect. Is the computer able to access the url?',
+		)
+	}) as unknown as typeof fetch
+
+	await expect(
+		expectIpv6LoopbackRefused(3000, '/api/trpc/boot-probe'),
+	).resolves.toBeUndefined()
+})
+
+test('IPv6 loopback probe still conflicts on TimeoutError name from AbortSignal.timeout', async () => {
+	globalThis.fetch = (async () => {
+		const e = new Error('The operation timed out.')
+		e.name = 'TimeoutError'
+		throw e
+	}) as unknown as typeof fetch
+
+	await expect(
+		expectIpv6LoopbackRefused(3000, '/api/trpc/boot-probe'),
+	).rejects.toThrow(/accepted the connection .* without answering/)
 })

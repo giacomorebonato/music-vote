@@ -16,7 +16,11 @@
 // - expectIpv6LoopbackRefused: the server holds no IPv6 socket, so browsers
 //   resolving `localhost` to ::1 must be refused there. Anything answering
 //   on [::1] is a foreign process hijacking the loopback name, and the server
-//   refuses to run.
+//   refuses to run. Bun's fetch wraps connect failures in version- and
+//   platform-drifting text (1.4.2 on Linux has no errno token; 1.4.4+/canary
+//   prefix it), so only an answered probe or a timeout after an accepted
+//   connection means [::1] is occupied; every other connect failure means it
+//   is free - including unreachable (no v6 loopback, nothing can squat it).
 
 const PROBE_TIMEOUT_MS = 2_000
 
@@ -72,13 +76,21 @@ export async function expectIpv6LoopbackRefused(
 		) {
 			throw cause
 		}
-		// This server holds no IPv6 socket, so loopback ::1 must be refused when
-		// nobody else took it. Only a refused/reset connection counts as free;
-		// a timeout means something accepted the connection without answering.
+		// Bun's fetch wraps connect failures in version- and platform-drifting
+		// text (1.4.2 on Linux wraps a refused [::1] connect as a bare TypeError
+		// with no errno token; 1.4.4+/canary prefix errno tokens), so a refusal
+		// cannot be detected by message. Only the two occupied outcomes are
+		// classified: answered (rethrown above) or accepted-but-silent
+		// (AbortSignal.timeout fires). Every other connect failure resolves as
+		// free - including unreachable, since without a v6 loopback nothing can
+		// squat [::1].
 		const message = cause instanceof Error ? cause.message : String(cause)
-		if (!/ECONNREFUSED|Connection refused|Connection reset/i.test(message)) {
+		if (
+			(cause instanceof Error && cause.name === 'TimeoutError') ||
+			/timed out|operation timed out/i.test(message)
+		) {
 			throw new Error(
-				`Server bind check failed: probe ${target} was neither refused nor answered (${message}); expected [::1] to be free because this server binds IPv4 only. Stop whatever holds [::1]:${port} or set PORT.`,
+				`another process accepted the connection on [::1]:${port} without answering (probe ${probePath} timed out). Stop it or set PORT.`,
 				{ cause },
 			)
 		}
