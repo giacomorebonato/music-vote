@@ -28,8 +28,35 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: bun run verify
 
+  # Prod-parity gate: the Dockerfile pins oven/bun:1.4.2, but the check job
+  # runs canary (lint/fmt need it). Bun wraps connect errors in
+  # version-drifting text, so a server that boots on canary may still
+  # crash-loop on 1.4.2 — this job boots the real server under the exact
+  # prod Bun and runs both Playwright suites. Keep this version in sync
+  # with the Dockerfile FROM line.
+  runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install
+        env:
+          DATABASE_URL: file:./dev.db
+      - run: bun x playwright install --with-deps chromium
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: bun run test:e2e
+        env:
+          PORT: 3100
+          CI: 1
+      - run: bun run test:e2e:ssr
+        env:
+          PORT: 3100
+          CI: 1
+
   deploy:
-    needs: [check]
+    needs: [check, runtime]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     concurrency:
       group: fly-production
