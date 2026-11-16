@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 export const performanceActionSchema = z.object({
 	roomId: z.string().min(1),
-	action: z.enum(['build', 'drop', 'strip']),
+	action: z.enum(['build', 'drop', 'strip', 'clear']),
 })
 
 // A one-shot host steering note: consumed by the next delivered update; the

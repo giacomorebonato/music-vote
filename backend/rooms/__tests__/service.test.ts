@@ -693,6 +693,51 @@ test('performance actions require owner and live room, and commit only on playba
 	expect(undone.grooveLocked).toBe(true)
 })
 
+test('clear removes an active performance layer as a candidate and no-ops without one', async () => {
+	const host = await makeHost()
+	const room = await service.createRoom(host.id, baseInput())
+	await service.startRoom(room.id, host.id)
+
+	// No layer is active on a fresh pattern: clear must not create anything.
+	await service.perform(room.id, host.id, 'clear')
+	expect(
+		await prisma.patternVersion.findFirst({
+			where: { roomId: room.id, status: 'candidate' },
+		}),
+	).toBeNull()
+	expect(
+		await prisma.poll.findFirst({
+			where: { roomId: room.id, kind: 'performance' },
+		}),
+	).toBeNull()
+
+	// Activate a layer, confirm it, then clear it.
+	const built = await prisma.patternVersion.findFirstOrThrow({
+		where: { roomId: room.id, status: 'applied' },
+		orderBy: { appliedAt: 'desc' },
+	})
+	await service.perform(room.id, host.id, 'build')
+	const layerCandidate = await prisma.patternVersion.findFirstOrThrow({
+		where: { roomId: room.id, status: 'candidate' },
+	})
+	await service.reportApplyResult(room.id, host.id, layerCandidate.id, true)
+	expect(
+		(await prisma.room.findUniqueOrThrow({ where: { id: room.id } }))
+			.currentCode,
+	).toContain('music-vote performance')
+
+	// A second perform while the clear is preparing must wait.
+	await service.perform(room.id, host.id, 'clear')
+	const clearCandidate = await prisma.patternVersion.findFirstOrThrow({
+		where: { roomId: room.id, status: 'candidate' },
+	})
+	expect(clearCandidate.code).not.toContain('music-vote performance')
+	expect(clearCandidate.code).toBe(built.code)
+	await expect(service.perform(room.id, host.id, 'clear')).rejects.toThrow(
+		'Wait',
+	)
+})
+
 // --- steerRoom ---
 
 const STEER_CODE = 's("bd sd cp [hh hh]").gain(0.85)'

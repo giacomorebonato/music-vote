@@ -10,7 +10,7 @@ import {
 	generateOutro,
 	generateSteeredPattern,
 } from '@backend/music/engine'
-import { performancePattern } from '@shared/music/performance'
+import { MARKER, performancePattern } from '@shared/music/performance'
 import type { StateDoc } from '@backend/music/state-doc'
 import {
 	armScheduler,
@@ -88,6 +88,8 @@ export async function perform(
 		})
 		if (pending)
 			throw new Error('Wait for the current musical change to finish')
+		// Nothing to strip: a racing clear must not create a pointless change.
+		if (action === 'clear' && !room.currentCode.startsWith(MARKER)) return null
 		const latest = await tx.poll.findFirst({
 			where: { roomId },
 			orderBy: { seq: 'desc' },
@@ -117,6 +119,8 @@ export async function perform(
 			},
 		})
 	})
+	// A clear with no active layer is a no-op: nothing was created to publish.
+	if (!version) return
 	hub.publishHost(roomId, {
 		type: 'code_update',
 		code: version.code,

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { createRoomSchema, steerSchema } from '../room'
+import { createRoomSchema, performanceActionSchema, steerSchema } from '../room'
 
 const base = {
 	bpm: 120,
@@ -85,5 +85,20 @@ test('pollOpenSec rejects below 15s and above 600s', () => {
 			pollOpenSec: 601,
 			pollIntervalSec: 60,
 		}).success,
+	).toBe(false)
+})
+
+test('performanceActionSchema accepts the clear action and rejects unknowns', () => {
+	expect(
+		performanceActionSchema.safeParse({ roomId: 'r1', action: 'clear' })
+			.success,
+	).toBe(true)
+	expect(
+		performanceActionSchema.safeParse({ roomId: 'r1', action: 'build' })
+			.success,
+	).toBe(true)
+	expect(
+		performanceActionSchema.safeParse({ roomId: 'r1', action: 'explode' })
+			.success,
 	).toBe(false)
 })
