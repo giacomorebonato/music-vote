@@ -27,6 +27,7 @@ import { pickPendingCandidate } from '@frontend/lib/pending-candidate'
 import { useRoomChannel } from '@frontend/lib/room-ws'
 import { useTRPC } from '@frontend/lib/trpc'
 import type { CodeUpdateEvent, WsEvent } from '@shared/realtime/events'
+import { activePerformanceAction } from '@shared/music/performance'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -514,6 +515,9 @@ function HostConsole({ roomId }: { roomId: string }) {
 		lockGroove.isPending ||
 		pendingCandidate !== null ||
 		crowdQuery.data?.deliveryStatus === 'preparing'
+	// Derived from the playing code on every render: crowd evolution and ended
+	// audience moments remove the layer without a host click.
+	const activeLayer = activePerformanceAction(displayCode ?? '')
 	const performanceControls = (
 		<>
 			{(['build', 'drop', 'strip'] as const).map((action) => (
@@ -521,10 +525,15 @@ function HostConsole({ roomId }: { roomId: string }) {
 					key={action}
 					type="button"
 					data-testid={`perform-${action}`}
-					className={`btn ${action === 'drop' ? 'btn-secondary' : 'btn-outline'}`}
+					className={`btn ${activeLayer === action ? 'btn-secondary' : 'btn-outline'}`}
+					aria-pressed={activeLayer === action}
 					disabled={room.status !== 'live' || changing}
 					onClick={() => {
-						perform.mutate({ roomId, action }, mutationOptionsFor())
+						// Tapping the active layer strips it back to the plain groove.
+						perform.mutate(
+							{ roomId, action: activeLayer === action ? 'clear' : action },
+							mutationOptionsFor(),
+						)
 					}}
 				>
 					{action === 'build'
@@ -547,7 +556,7 @@ function HostConsole({ roomId }: { roomId: string }) {
 					)
 				}}
 			>
-				{room.grooveLocked ? 'Release groove' : 'Lock this groove'}
+				Lock this groove
 			</button>
 			<span className="text-sm opacity-70" role="status">
 				{changing

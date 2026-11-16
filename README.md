@@ -52,16 +52,21 @@ musical quality still need a venue rehearsal before enabling recordings at an ev
 
 ## Performing live
 
-The host console includes **Build up**, **Drop**, and **Strip back**. These
-prepared transformations keep the current musical material and tempo and wait
-for the next four-bar phrase on the host's audio clock. Build up thins the bass
-and adds a snare roll; Drop restores the full groove with a kick and clap accent;
-Strip back creates a filtered breakdown. Repeated actions replace the previous
-performance layer. Undo restores the preceding confirmed pattern.
+The host console includes **Build up**, **Drop**, and **Strip back** as on/off
+toggles. These prepared transformations keep the current musical material and
+tempo and wait for the next four-bar phrase on the host's audio clock. Build up
+thins the bass and adds a snare roll; Drop restores the full groove with a kick
+and clap accent; Strip back creates a filtered breakdown. Tapping an inactive
+toggle applies that layer and lights it, replacing the previous one; tapping
+the lit toggle strips the layer and returns to the plain groove. Each toggle
+reads its state from the pattern actually playing, so a layer removed by crowd
+evolution or an ended audience moment turns its toggle off by itself. Undo
+restores the preceding confirmed pattern.
 
 **Lock this groove** pauses automatic crowd evolution while phones keep voting.
-The lock survives reloads and Undo. **Release groove** lets the next crowd check
-use the latest answers. Manual performance controls work while locked.
+The lock survives reloads and Undo; the button keeps its label and shows the
+locked state. Unlocking lets the next crowd check use the latest answers.
+Manual performance controls work while locked.
 
 **Steer the music** turns one short host note ("the kick is buried — bring the
 drums forward") into a regeneration of the current pattern. It works while the

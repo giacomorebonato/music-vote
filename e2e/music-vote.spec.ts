@@ -182,6 +182,7 @@ test('persistent crowd preferences remain editable across updates, reloads and s
 			'aria-pressed',
 			'true',
 		)
+		await expect(host.getByTestId('groove-lock')).toHaveText('Lock this groove')
 		await host.reload()
 		await expect(host.getByTestId('groove-lock')).toHaveAttribute(
 			'aria-pressed',
@@ -203,8 +204,29 @@ test('persistent crowd preferences remain editable across updates, reloads and s
 				{ timeout: 25_000 },
 			)
 		}
+		// The toggles read as on/off: Drop is the active layer now.
+		await expect(stage.getByTestId('perform-drop')).toHaveAttribute(
+			'aria-pressed',
+			'true',
+			{ timeout: 25_000 },
+		)
+		await expect(stage.getByTestId('perform-build')).toHaveAttribute(
+			'aria-pressed',
+			'false',
+		)
+		// Tapping the active layer strips it back to the plain groove.
+		await stage.getByTestId('perform-drop').click()
+		await expect(stage.getByTestId('perform-drop')).toBeDisabled()
+		await expect(stage.getByTestId('perform-drop')).toBeEnabled({
+			timeout: 25_000,
+		})
+		await expect(stage.getByTestId('perform-drop')).toHaveAttribute(
+			'aria-pressed',
+			'false',
+			{ timeout: 25_000 },
+		)
 		await stage.getByRole('button', { name: 'Reveal code' }).click()
-		await expect(stage.getByTestId('current-code')).toContainText(
+		await expect(stage.getByTestId('current-code')).not.toContainText(
 			'music-vote performance',
 		)
 		await stage.getByRole('button', { name: 'Hide code' }).click()
