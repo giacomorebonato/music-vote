@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { performancePattern } from '@backend/music/performance'
+import { performancePattern } from '@shared/music/performance'
 import { buildInitialPatternPrompt } from '@backend/music/prompts'
 import { compileCheck } from '@backend/music/validate'
 
@@ -12,6 +12,7 @@ test('prepared actions compile and replace earlier performance layers without ch
 		const replacement = performancePattern(code, 'drop')
 		expect(replacement).toBe(performancePattern(base, 'drop'))
 	}
+	expect(compileCheck(performancePattern(base, 'clear'))).toEqual({ ok: true })
 })
 test('genre opening anchors are valid patterns with independent musical layers', () => {
 	const prompt = buildInitialPatternPrompt({ genre: 'house', bpm: 120 })

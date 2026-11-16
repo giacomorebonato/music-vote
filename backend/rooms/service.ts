@@ -10,7 +10,7 @@ import {
 	generateOutro,
 	generateSteeredPattern,
 } from '@backend/music/engine'
-import { performancePattern } from '@backend/music/performance'
+import { performancePattern } from '@shared/music/performance'
 import type { StateDoc } from '@backend/music/state-doc'
 import {
 	armScheduler,

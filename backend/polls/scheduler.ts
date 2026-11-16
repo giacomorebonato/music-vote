@@ -3,7 +3,7 @@ import {
 	readDirectionContext,
 	resolveContributionContext,
 } from '@backend/contributions'
-import { performancePattern } from '@backend/music/performance'
+import { performancePattern } from '@shared/music/performance'
 import { samplePlayback } from '@backend/recordings'
 import {
 	contributionContextSchema,
