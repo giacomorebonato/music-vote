@@ -17,6 +17,7 @@ Target: app `music-vote` on Fly.io. Infra files live in repo: `Dockerfile` (mult
   flyctl deploy
   ```
 - **Automatic deploy**: `.github/workflows/ci.yml` runs the full verification gate on pushes to `main` (including merged PRs), then deploys to the GitHub `production` environment. The repository Actions secret `FLY_API_TOKEN` must contain an app-scoped Fly deploy token. Production deploys are serialized and use `--ha=false` to keep SQLite on one machine. `workflow_dispatch` can also run verification and deployment from `main`.
+- **Prod-parity runtime gate**: the CI `runtime` job boots the real server under the Bun version pinned in the Dockerfile (`FROM oven/bun:1.4.2`) and runs both Playwright suites (`test:e2e`, `test:e2e:ssr`); deploy needs `[check, runtime]`. When bumping the Dockerfile `FROM oven/bun:X`, bump `runtime`'s `bun-version` in the same commit — canary (`.bun-version`) stays only for the `check` job, which needs it for native `bun check`/`lint`/`fmt`.
 - **Redeploy** (update code, keep data): `flyctl deploy --ha=false`.
 - **Replace an existing app** (fresh state, wipes data): `flyctl apps destroy music-vote` then run the first-deploy steps. The volume must be recreated.
 - **Open**: `flyctl apps open` → `https://music-vote.fly.dev`.

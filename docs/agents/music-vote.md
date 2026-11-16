@@ -50,10 +50,11 @@ Real musicality needs a real provider: point `OLLAMA_BASE_URL` at a local Ollama
 `OLLAMA_API_KEY`. Nothing in CI tests that — the model choice is not
 automatable, so it stays a manual check.
 
-At boot the server refuses to run if another process answers on the loopback
-port (`Port NNNN conflict: another process is answering …`). Stop the other
-process or set `PORT` — Bun's bind can otherwise coexist silently with it and
-browsers hit the wrong app.
+At boot the server probes both loopback families and refuses to run on a
+conflict (`Port NNNN conflict`): a foreign process answering on `127.0.0.1`,
+or answering or accepting-without-answering on `[::1]`. Stop the other
+process or set `PORT` — Bun's bind can otherwise coexist silently with a
+`127.0.0.1` squatter and browsers hit the wrong app.
 
 ## Sharing a dev branch over the tailnet
 
@@ -167,6 +168,16 @@ production probe, MiniMax's default thinking timed out at both 25 and 90 seconds
 - **Invalid codegen** (twice) or a failed browser sandbox eval → no change is
   applied, the last-good pattern keeps playing, the poll closes normally and
   the failure is logged.
+- **Boot probes run on every boot, in every env.** After `Bun.serve`,
+  `backend/server.ts` probes `127.0.0.1` (must answer with our tRPC JSON) and
+  `[::1]` (must be refused) and exits 1 on a conflict. The IPv6 probe
+  classifies only two outcomes as occupied — an answered probe, or a
+  connection accepted-but-silent (timeout): Bun's fetch wraps connect
+  failures in version- and platform-drifting text (1.4.2 on Linux emits no
+  errno token, 1.4.4+/canary prefix one), so never match on errno strings —
+  every other connect failure resolves as free. Triage a down machine from
+  its machine events: `exit_code 1` + restart_count climbing = boot-time
+  refusal; the error line is in the machine's console via `flyctl logs`.
 - **Deploy freshness.** `NODE_ENV=production` is set in the Dockerfile; without
   it the SPA shell is served unbundled from the dev server path. The build must
   produce `dist/` (`bun run build`) — `fly deploy` builds from the Dockerfile.
