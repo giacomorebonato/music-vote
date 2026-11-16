@@ -34,4 +34,8 @@ if [ ! -x "$BUN_BIN" ]; then
 		exit 1
 	fi
 fi
+command -v portless >/dev/null || {
+	echo "dev:net: portless not found — run bun install (or bun run bootstrap)." >&2
+	exit 1
+}
 exec "$(command -v portless)" run --tailscale "$BUN_BIN" run dev
