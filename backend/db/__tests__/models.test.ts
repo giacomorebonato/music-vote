@@ -24,11 +24,14 @@ execSync('DATABASE_URL=file:./models-test.db bunx prisma migrate deploy', {
 const { prisma } = await import('@backend/db/client')
 
 const hostEmail = `host-${crypto.randomUUID()}@example.com`
+const defaultsEmail = `defaults-${crypto.randomUUID()}@example.com`
 
 afterAll(async () => {
 	// No $disconnect here: `prisma` is the process-wide client every service
 	// shares, so closing it would break test files that run later in this process.
-	await prisma.user.deleteMany({ where: { email: hostEmail } })
+	await prisma.user.deleteMany({
+		where: { email: { in: [hostEmail, defaultsEmail] } },
+	})
 })
 
 test('vote dedup: second vote same token+poll throws P2002', async () => {
@@ -70,6 +73,25 @@ test('vote dedup: second vote same token+poll throws P2002', async () => {
 	}
 
 	expect(code).toBe('P2002')
+})
+
+test('createRoom defaults: recordings on, moments off', async () => {
+	const host = await prisma.user.create({
+		data: { name: 'Defaults', email: defaultsEmail },
+	})
+	const room = await prisma.room.create({
+		data: {
+			hostId: host.id,
+			bpm: 120,
+			lengthSec: 600,
+			pollIntervalSec: 120,
+			genre: 'techno',
+			status: 'lobby',
+			stateDoc: {},
+		},
+	})
+	expect(room.recordingsEnabled).toBe(true)
+	expect(room.momentsEnabled).toBe(false)
 })
 
 test('createRoomSchema rejects bpm 59 and 201', () => {
