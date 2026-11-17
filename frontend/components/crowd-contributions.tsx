@@ -73,7 +73,11 @@ export function CrowdContributions({
 					ensure={ensure}
 					onChanged={changed}
 				/>
-			) : null}
+			) : (
+				<p className="text-sm opacity-70">
+					Recorded sounds are paused by the host.
+				</p>
+			)}
 			{data.recordings.length ? (
 				<section className="card bg-base-100">
 					<div className="card-body p-4">

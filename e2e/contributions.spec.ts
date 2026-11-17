@@ -140,6 +140,11 @@ test('listeners revise text and record a sound that is approved, played, and wit
 		await expect(
 			phone.getByRole('button', { name: 'Record a sound', exact: true }),
 		).toHaveCount(0, { timeout: 10_000 })
+		await expect(
+			phone.getByText('Recorded sounds are paused by the host.', {
+				exact: true,
+			}),
+		).toBeVisible({ timeout: 10_000 })
 		await phone.reload()
 		await expect(
 			phone.getByText('percussion: withdrawn', { exact: true }),
